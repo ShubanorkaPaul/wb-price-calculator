@@ -37,12 +37,33 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+# ============ ИНИЦИАЛИЗАЦИЯ SESSION STATE ============
+
+if "calc_loaded" not in st.session_state:
+    st.session_state["calc_loaded"] = False
+
+if "df_results" not in st.session_state:
+    st.session_state["df_results"] = None
+
+if "cost_prices" not in st.session_state:
+    st.session_state["cost_prices"] = {}
+
+if "show_confirm" not in st.session_state:
+    st.session_state["show_confirm"] = None
+
+if "to_update_data" not in st.session_state:
+    st.session_state["to_update_data"] = None
+
+if "update_result" not in st.session_state:
+    st.session_state["update_result"] = None
+
+
 # ============ SIDEBAR ============
 
 with st.sidebar:
     st.title("⚙️ Настройки")
 
-    api_key = st.text_input("🔑 API ключ WB", type="password")
+    api_key = st.text_input("🔑 API ключ WB", type="password", key="api_key_input")
 
     if api_key:
         st.success("✅ Ключ введён")
@@ -107,7 +128,8 @@ with st.sidebar:
         min_value=10,
         max_value=50,
         value=20,
-        step=1
+        step=1,
+        key="target_margin"
     )
 
     st.info(f"""
@@ -121,8 +143,12 @@ with st.sidebar:
 
     st.markdown("---")
 
-    if st.button("🗑️ Очистить кеш", use_container_width=True):
+    if st.button("🗑️ Очистить кеш и данные", use_container_width=True):
         st.cache_data.clear()
+        st.session_state["calc_loaded"] = False
+        st.session_state["df_results"] = None
+        st.session_state["show_confirm"] = None
+        st.session_state["to_update_data"] = None
         st.rerun()
 
 
@@ -152,6 +178,25 @@ if not cost_prices:
     st.stop()
 
 
+# Показываем результат обновления цен (если недавно обновили)
+if st.session_state.get("update_result"):
+    result = st.session_state["update_result"]
+    st.success(f"✅ Отправлено на WB: **{result['success']}** товаров")
+    if result.get("errors"):
+        st.error("Ошибки при обновлении:")
+        for err in result["errors"]:
+            st.text(err)
+    st.info("💡 Цены появятся на WB через 5-15 минут")
+
+    if st.button("Скрыть уведомление"):
+        st.session_state["update_result"] = None
+        st.rerun()
+
+    st.markdown("---")
+
+
+# ============ КНОПКА ЗАГРУЗКИ ============
+
 col1, col2 = st.columns([1, 3])
 with col1:
     load_button = st.button(
@@ -163,121 +208,128 @@ with col1:
 with col2:
     st.info("⏱️ Загрузка занимает 1-3 минуты. Данные кешируются.")
 
-if "calc_loaded" not in st.session_state:
-    st.session_state["calc_loaded"] = False
 
 if load_button:
     st.session_state["calc_loaded"] = True
+    st.session_state["df_results"] = None  # Сбрасываем чтобы пересчитать
 
 if not st.session_state["calc_loaded"]:
     st.stop()
 
 
-with st.spinner("📥 Загружаем карточки товаров..."):
-    cards_df = get_all_cards(api_key)
+# ============ ЗАГРУЗКА И РАСЧЁТ ============
 
-if cards_df.empty:
-    st.error("❌ Не удалось получить карточки товаров")
-    st.stop()
+# Проверяем, есть ли уже рассчитанные данные в сессии
+if st.session_state["df_results"] is None:
+    with st.spinner("📥 Загружаем карточки товаров..."):
+        cards_df = get_all_cards(api_key)
 
-st.success(f"✅ Загружено карточек: {len(cards_df)}")
+    if cards_df.empty:
+        st.error("❌ Не удалось получить карточки товаров")
+        st.session_state["calc_loaded"] = False
+        st.stop()
 
-with st.spinner("💰 Загружаем текущие цены..."):
-    prices_df = get_prices(api_key)
+    st.success(f"✅ Загружено карточек: {len(cards_df)}")
 
-if prices_df.empty:
-    st.error("❌ Не удалось получить цены")
-    st.stop()
+    with st.spinner("💰 Загружаем текущие цены..."):
+        prices_df = get_prices(api_key)
 
-st.success(f"✅ Загружено цен: {len(prices_df)}")
+    if prices_df.empty:
+        st.error("❌ Не удалось получить цены")
+        st.session_state["calc_loaded"] = False
+        st.stop()
 
-with st.spinner("📊 Загружаем комиссии по категориям..."):
-    commissions_df = get_commissions(api_key)
+    st.success(f"✅ Загружено цен: {len(prices_df)}")
 
+    with st.spinner("📊 Загружаем комиссии по категориям..."):
+        commissions_df = get_commissions(api_key)
 
-merged = cards_df.merge(
-    prices_df[["nm_id", "price", "discount", "discounted_price"]],
-    on="nm_id",
-    how="left"
-)
-
-merged["cost_price"] = merged["article"].astype(str).str.strip().map(cost_prices).fillna(0)
-
-if not commissions_df.empty:
-    merged = merged.merge(
-        commissions_df[["subject_id", "commission_fbo"]],
-        on="subject_id",
+    merged = cards_df.merge(
+        prices_df[["nm_id", "price", "discount", "discounted_price"]],
+        on="nm_id",
         how="left"
     )
-    merged["commission_percent"] = merged["commission_fbo"].fillna(
-        merged["subject"].apply(get_commission_by_category)
-    )
-else:
-    merged["commission_percent"] = merged["subject"].apply(get_commission_by_category)
 
-merged["logistics"] = merged["volume_liters"].apply(estimate_logistics)
+    merged["cost_price"] = merged["article"].astype(str).str.strip().map(cost_prices).fillna(0)
 
-results = []
-for _, row in merged.iterrows():
-    if row["cost_price"] == 0 or row["price"] == 0:
-        continue
-
-    current = calculate_current_profit(
-        price_with_discount=row["discounted_price"] or row["price"],
-        commission_percent=row["commission_percent"],
-        logistics=row["logistics"],
-        cost_price=row["cost_price"]
-    )
-
-    recommended = calculate_recommended_price(
-        cost_price=row["cost_price"],
-        commission_percent=row["commission_percent"],
-        logistics=row["logistics"],
-        target_margin=target_margin,
-        discount_percent=row["discount"] or 0
-    )
-
-    if not recommended:
-        continue
-
-    status_icon, status_text = get_status(current["margin"], target_margin)
-
-    # Определяем категорию
-    if current["margin"] < 0:
-        category = "убыточные"
-    elif current["margin"] < target_margin - 2:
-        category = "ниже цели"
+    if not commissions_df.empty:
+        merged = merged.merge(
+            commissions_df[["subject_id", "commission_fbo"]],
+            on="subject_id",
+            how="left"
+        )
+        merged["commission_percent"] = merged["commission_fbo"].fillna(
+            merged["subject"].apply(get_commission_by_category)
+        )
     else:
-        category = "в норме"
+        merged["commission_percent"] = merged["subject"].apply(get_commission_by_category)
 
-    results.append({
-        "nm_id": row["nm_id"],
-        "article": row["article"],
-        "title": row["title"],
-        "subject": row["subject"],
-        "cost_price": row["cost_price"],
-        "commission_percent": row["commission_percent"],
-        "logistics": row["logistics"],
-        "current_price": row["price"],
-        "current_discount": row["discount"],
-        "current_price_final": row["discounted_price"] or row["price"],
-        "current_profit": current["profit"],
-        "current_margin": current["margin"],
-        "recommended_price": recommended["price_without_discount"],
-        "recommended_final": recommended["price_with_discount"],
-        "recommended_profit": recommended["profit"],
-        "recommended_margin": recommended["margin"],
-        "profit_diff": recommended["profit"] - current["profit"],
-        "status_icon": status_icon,
-        "status_text": status_text,
-        "category": category,
-    })
+    merged["logistics"] = merged["volume_liters"].apply(estimate_logistics)
 
-if not results:
-    st.warning("⚠️ Нет товаров для расчёта. Проверь себестоимость и цены.")
-    st.stop()
+    results = []
+    for _, row in merged.iterrows():
+        if row["cost_price"] == 0 or row["price"] == 0:
+            continue
 
-df_results = pd.DataFrame(results)
+        current = calculate_current_profit(
+            price_with_discount=row["discounted_price"] or row["price"],
+            commission_percent=row["commission_percent"],
+            logistics=row["logistics"],
+            cost_price=row["cost_price"]
+        )
+
+        recommended = calculate_recommended_price(
+            cost_price=row["cost_price"],
+            commission_percent=row["commission_percent"],
+            logistics=row["logistics"],
+            target_margin=target_margin,
+            discount_percent=row["discount"] or 0
+        )
+
+        if not recommended:
+            continue
+
+        status_icon, status_text = get_status(current["margin"], target_margin)
+
+        if current["margin"] < 0:
+            category = "убыточные"
+        elif current["margin"] < target_margin - 2:
+            category = "ниже цели"
+        else:
+            category = "в норме"
+
+        results.append({
+            "nm_id": row["nm_id"],
+            "article": row["article"],
+            "title": row["title"],
+            "subject": row["subject"],
+            "cost_price": row["cost_price"],
+            "commission_percent": row["commission_percent"],
+            "logistics": row["logistics"],
+            "current_price": row["price"],
+            "current_discount": row["discount"],
+            "current_price_final": row["discounted_price"] or row["price"],
+            "current_profit": current["profit"],
+            "current_margin": current["margin"],
+            "recommended_price": recommended["price_without_discount"],
+            "recommended_final": recommended["price_with_discount"],
+            "recommended_profit": recommended["profit"],
+            "recommended_margin": recommended["margin"],
+            "profit_diff": recommended["profit"] - current["profit"],
+            "status_icon": status_icon,
+            "status_text": status_text,
+            "category": category,
+        })
+
+    if not results:
+        st.warning("⚠️ Нет товаров для расчёта. Проверь себестоимость и цены.")
+        st.session_state["calc_loaded"] = False
+        st.stop()
+
+    st.session_state["df_results"] = pd.DataFrame(results)
+
+
+df_results = st.session_state["df_results"]
 
 
 # ============ РЕЗУЛЬТАТЫ ============
@@ -336,7 +388,6 @@ else:
     filtered = df_results.copy()
     filter_name = "все"
 
-# Показываем сколько будет обновлено
 to_update_from_filter = filtered[filtered["current_price"] != filtered["recommended_price"]]
 
 st.info(f"📊 Отображено товаров: **{len(filtered)}** | Из них требуют обновления цены: **{len(to_update_from_filter)}**")
@@ -366,12 +417,11 @@ else:
     st.info("Нет товаров в этой категории")
 
 
-# ============ ЭКСПОРТ И ОБНОВЛЕНИЕ ============
+# ============ ЭКСПОРТ ============
 
 st.markdown("---")
-st.subheader("📤 Экспорт и обновление цен")
+st.subheader("📤 Экспорт")
 
-# Скачивание Excel
 output = io.BytesIO()
 with pd.ExcelWriter(output, engine="openpyxl") as writer:
     df_results.to_excel(writer, sheet_name="Все товары", index=False)
@@ -391,76 +441,75 @@ st.download_button(
     use_container_width=True
 )
 
+
+# ============ ОБНОВЛЕНИЕ ЦЕН ============
+
 st.markdown("---")
-
-# ==== ВАЖНЫЙ БЛОК: ОБНОВЛЕНИЕ ЦЕН ====
-
 st.subheader("💰 Обновление цен на WB")
 
-st.warning(f"""
-⚠️ **Внимание!** Ты собираешься обновить цены на WB.
+# Если ещё не подтвердил
+if st.session_state["show_confirm"] is None:
+    st.warning(f"""
+    ⚠️ Ты собираешься обновить цены на WB.
 
-Сейчас выбрана категория: **"{filter_choice}"**  
-Будет обновлено товаров: **{len(to_update_from_filter)}**
-""")
+    Сейчас выбрана категория: **"{filter_choice}"**  
+    Будет обновлено товаров: **{len(to_update_from_filter)}**
+    """)
 
-col_upd1, col_upd2, col_upd3 = st.columns(3)
+    col_upd1, col_upd2 = st.columns(2)
 
-with col_upd1:
-    update_filtered = st.button(
-        f"💰 Обновить только {filter_name} ({len(to_update_from_filter)})",
-        type="primary",
-        use_container_width=True,
-        disabled=(len(to_update_from_filter) == 0)
-    )
+    with col_upd1:
+        if st.button(
+            f"💰 Обновить только {filter_name} ({len(to_update_from_filter)})",
+            type="primary",
+            use_container_width=True,
+            disabled=(len(to_update_from_filter) == 0),
+            key="btn_update_filtered"
+        ):
+            st.session_state["show_confirm"] = "filtered"
+            st.session_state["to_update_data"] = to_update_from_filter.copy()
+            st.rerun()
 
-with col_upd2:
-    all_to_update = df_results[df_results["current_price"] != df_results["recommended_price"]]
-    update_all = st.button(
-        f"⚡ Обновить ВСЕ ({len(all_to_update)})",
-        use_container_width=True,
-        disabled=(len(all_to_update) == 0)
-    )
+    with col_upd2:
+        all_to_update = df_results[df_results["current_price"] != df_results["recommended_price"]]
+        if st.button(
+            f"⚡ Обновить ВСЕ ({len(all_to_update)})",
+            use_container_width=True,
+            disabled=(len(all_to_update) == 0),
+            key="btn_update_all"
+        ):
+            st.session_state["show_confirm"] = "all"
+            st.session_state["to_update_data"] = all_to_update.copy()
+            st.rerun()
 
-with col_upd3:
-    if st.button("❌ Отмена", use_container_width=True):
-        st.session_state["show_confirm"] = None
-        st.rerun()
-
-if update_filtered:
-    st.session_state["show_confirm"] = "filtered"
-    st.session_state["to_update_data"] = to_update_from_filter.copy()
-
-if update_all:
-    st.session_state["show_confirm"] = "all"
-    st.session_state["to_update_data"] = all_to_update.copy()
-
-
-# ============ ПОДТВЕРЖДЕНИЕ ============
-
-if st.session_state.get("show_confirm"):
+# Если нажал одну из кнопок обновления - показываем подтверждение
+else:
     to_update = st.session_state["to_update_data"]
 
-    st.markdown("---")
     st.error(f"""
-    ## ⚠️ ПОДТВЕРЖДЕНИЕ
+    ## ⚠️ ПОДТВЕРЖДЕНИЕ ОБНОВЛЕНИЯ ЦЕН
 
     Будет обновлено **{len(to_update)}** товаров на Wildberries.
 
     Проверь список ниже перед подтверждением!
     """)
 
-    # Показываем что будет обновлено
     preview = to_update[[
-        "article", "subject", "current_price", "recommended_price", "current_margin", "recommended_margin"
+        "article", "subject", "current_price", "recommended_price",
+        "current_margin", "recommended_margin"
     ]].copy()
     preview.columns = ["Артикул", "Категория", "Было ₽", "Станет ₽", "Была маржа %", "Станет маржа %"]
-    st.dataframe(preview, use_container_width=True, height=300)
+    st.dataframe(preview, use_container_width=True, height=400)
 
     col_conf1, col_conf2 = st.columns(2)
 
     with col_conf1:
-        if st.button("✅ ДА, обновить эти цены на WB", type="primary", use_container_width=True):
+        if st.button(
+            "✅ ДА, обновить эти цены на WB",
+            type="primary",
+            use_container_width=True,
+            key="btn_confirm_yes"
+        ):
             price_updates = []
             for _, row in to_update.iterrows():
                 price_updates.append({
@@ -469,22 +518,23 @@ if st.session_state.get("show_confirm"):
                     "discount": int(row["current_discount"]) if row["current_discount"] else 0
                 })
 
-            with st.spinner("💰 Обновляем цены на WB..."):
+            with st.spinner(f"💰 Обновляем {len(price_updates)} товаров на WB..."):
                 result = update_prices(api_key, price_updates)
 
-            st.success(f"✅ Отправлено {result['success']} товаров")
-
-            if result["errors"]:
-                st.error("Ошибки:")
-                for err in result["errors"]:
-                    st.text(err)
-
-            st.info("💡 Цены появятся на WB через 5-15 минут")
+            # Сохраняем результат для отображения
+            st.session_state["update_result"] = result
             st.session_state["show_confirm"] = None
+            st.session_state["to_update_data"] = None
+            st.rerun()
 
     with col_conf2:
-        if st.button("❌ Отмена, ничего не делать", use_container_width=True):
+        if st.button(
+            "❌ Отмена",
+            use_container_width=True,
+            key="btn_confirm_no"
+        ):
             st.session_state["show_confirm"] = None
+            st.session_state["to_update_data"] = None
             st.rerun()
 
 
