@@ -35,7 +35,6 @@ def make_request(method, url, api_key, params=None, json_data=None, max_retries=
                 return response, None
 
             if response.status_code == 429:
-                # Прогрессивное ожидание: 30, 60, 90, 120, 150 сек
                 wait_time = 30 * (attempt + 1)
                 if attempt < max_retries - 1:
                     with st.spinner(f"⏳ WB ограничил запросы. Ждём {wait_time} сек... (попытка {attempt+2}/{max_retries})"):
@@ -64,7 +63,6 @@ def get_all_cards(api_key):
     """Получить все карточки товаров"""
 
     url = f"{BASE_CONTENT}/content/v2/get/cards/list"
-
     all_cards = []
     cursor = {"limit": 100}
 
@@ -84,11 +82,7 @@ def get_all_cards(api_key):
             if error == "401":
                 st.error("❌ Неверный API ключ или нет прав на 'Контент'")
             elif error == "429":
-                st.warning("""
-                ⚠️ WB временно ограничил запросы (429).
-                
-                Подожди 3-5 минут и попробуй снова.
-                """)
+                st.warning("⚠️ WB временно ограничил запросы (429). Подожди 3-5 минут.")
             else:
                 st.error(f"❌ Ошибка получения карточек: {error}")
             return pd.DataFrame()
@@ -160,26 +154,13 @@ def get_prices(api_key):
 
     while True:
         params = {"limit": limit, "offset": offset}
-        response, error = make_request(
-            "GET", url, api_key,
-            params=params,
-            max_retries=5
-        )
+        response, error = make_request("GET", url, api_key, params=params, max_retries=5)
 
         if error:
             if error == "401":
                 st.error("❌ Нет прав 'Цены и скидки' у API ключа")
             elif error == "429":
-                st.warning("""
-                ⚠️ WB временно ограничил запросы (429 Too Many Requests).
-                
-                **Что делать:**
-                1. Подожди 5-10 минут
-                2. Нажми "🗑️ Очистить кеш" в боковой панели
-                3. Попробуй снова
-                
-                💡 Не жми кнопку "Загрузить" часто — данные кешируются на 30 минут.
-                """)
+                st.warning("⚠️ WB временно ограничил запросы. Подожди 5-10 минут и попробуй снова.")
             else:
                 st.error(f"❌ Ошибка получения цен: {error}")
             return pd.DataFrame()
@@ -226,10 +207,10 @@ def get_prices(api_key):
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_commissions(api_key):
     """
-    Получить комиссии по категориям для всех моделей продажи
+    Получить комиссии по категориям
     
-    ✅ ИСПРАВЛЕНО: правильное соответствие полей WB API:
-    - kgvpMarketplace      → FBS (Маркетплейс) 
+    Правильное соответствие полей WB API:
+    - kgvpMarketplace      → FBS (Маркетплейс)
     - paidStorageKgvp      → FBO (Склад WB)
     - kgvpSupplier         → DBS (Витрина)
     - kgvpSupplierExpress  → DBW (Курьер WB)
@@ -256,10 +237,10 @@ def get_commissions(api_key):
             result.append({
                 "subject_id": item.get("subjectID"),
                 "subject_name": item.get("subjectName", ""),
-                "commission_fbo": item.get("paidStorageKgvp", 0),      # FBO — склад WB
-                "commission_fbs": item.get("kgvpMarketplace", 0),      # FBS — маркетплейс
-                "commission_dbs": item.get("kgvpSupplier", 0),         # DBS — витрина
-                "commission_dbw": item.get("kgvpSupplierExpress", 0),  # DBW — курьер WB
+                "commission_fbo": item.get("paidStorageKgvp", 0),
+                "commission_fbs": item.get("kgvpMarketplace", 0),
+                "commission_dbs": item.get("kgvpSupplier", 0),
+                "commission_dbw": item.get("kgvpSupplierExpress", 0),
             })
 
         return pd.DataFrame(result)
@@ -270,9 +251,7 @@ def get_commissions(api_key):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_stocks_by_warehouse(api_key):
-    """
-    Получить остатки по складам чтобы определить FBO/FBS
-    """
+    """Получить остатки по складам"""
     from datetime import datetime, timedelta
 
     date_from = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
@@ -285,32 +264,21 @@ def get_stocks_by_warehouse(api_key):
 
     if error:
         if error == "429":
-            st.info("ℹ️ Остатки временно недоступны. Определить FBO/FBS не удалось.")
+            st.info("ℹ️ Остатки временно недоступны.")
         return pd.DataFrame()
 
     try:
         data = response.json()
         if not data:
             return pd.DataFrame()
-
-        df = pd.DataFrame(data)
-        return df
-
+        return pd.DataFrame(data)
     except Exception:
         return pd.DataFrame()
 
 
 def determine_model(article, stocks_df):
-    """
-    Определяет модель работы по остаткам:
-    Если есть на складе WB → FBO
-    Если только на своём → FBS
-    По умолчанию FBO
-    """
-    if stocks_df.empty:
-        return "FBO"
-
-    if "supplierArticle" not in stocks_df.columns:
+    """Определяет основную модель работы по остаткам"""
+    if stocks_df.empty or "supplierArticle" not in stocks_df.columns:
         return "FBO"
 
     article_stocks = stocks_df[stocks_df["supplierArticle"] == article]
@@ -320,10 +288,54 @@ def determine_model(article, stocks_df):
 
     if "warehouseName" in article_stocks.columns:
         warehouses = article_stocks["warehouseName"].astype(str).str.lower()
-        if warehouses.str.contains("продавец|фбс|fbs|свой", regex=True).any():
+        if warehouses.str.contains("продавец|фбс|fbs|свой", regex=True, na=False).any():
             return "FBS"
 
     return "FBO"
+
+
+def get_available_models(article, stocks_df):
+    """
+    Определяет какие модели доступны для товара по остаткам
+    Возвращает set: {"FBO", "FBS", "DBS"}
+    """
+    available = set()
+
+    if stocks_df.empty or "supplierArticle" not in stocks_df.columns:
+        return {"FBO", "FBS"}
+
+    article_stocks = stocks_df[stocks_df["supplierArticle"] == article]
+
+    if article_stocks.empty:
+        return set()
+
+    if "quantity" in article_stocks.columns:
+        article_stocks = article_stocks[article_stocks["quantity"] > 0]
+
+    if article_stocks.empty:
+        return set()
+
+    if "warehouseName" not in article_stocks.columns:
+        return {"FBO"}
+
+    warehouses = article_stocks["warehouseName"].astype(str).str.lower()
+
+    # DBS — витрина
+    if warehouses.str.contains("dbs|витрин", regex=True, na=False).any():
+        available.add("DBS")
+
+    # FBS — склад продавца
+    if warehouses.str.contains("склад продавца|фбс|fbs", regex=True, na=False).any():
+        available.add("FBS")
+
+    # FBO — склад WB (все остальные — обычно города)
+    wb_warehouses = warehouses[
+        ~warehouses.str.contains("dbs|витрин|склад продавца|фбс|fbs", regex=True, na=False)
+    ]
+    if len(wb_warehouses) > 0:
+        available.add("FBO")
+
+    return available
 
 
 def update_prices(api_key, price_updates):
@@ -336,7 +348,6 @@ def update_prices(api_key, price_updates):
 
     for i in range(0, len(price_updates), batch_size):
         batch = price_updates[i:i + batch_size]
-
         payload = {"data": batch}
 
         response, error = make_request("POST", url, api_key, json_data=payload)
