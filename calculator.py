@@ -2,12 +2,10 @@
 Модуль расчёта цен и юнит-экономики
 """
 
-
-TAX_RATE = 0.06  # УСН 6%
 ACQUIRING = 0.015  # Эквайринг 1.5%
 
 
-def calculate_current_profit(price_with_discount, commission_percent, logistics, cost_price, buyout_rate=0.90):
+def calculate_current_profit(price_with_discount, commission_percent, logistics, cost_price, buyout_rate=0.90, tax_rate=0.06):
     """Считает текущую прибыль по товару"""
 
     commission = price_with_discount * (commission_percent / 100)
@@ -17,7 +15,7 @@ def calculate_current_profit(price_with_discount, commission_percent, logistics,
     returns_cost = logistics * return_rate
 
     for_pay = price_with_discount - commission - acquiring - logistics - returns_cost
-    tax = price_with_discount * TAX_RATE
+    tax = price_with_discount * tax_rate
     profit = for_pay - cost_price - tax
 
     margin = (profit / price_with_discount * 100) if price_with_discount > 0 else 0
@@ -45,37 +43,23 @@ def calculate_recommended_price(
     max_discount=30,
     max_discount_change=5,
     keep_discount=False,
-    buyout_rate=0.90
+    buyout_rate=0.90,
+    tax_rate=0.06
 ):
-    """
-    Считает рекомендуемую цену исходя из целевой маржи
-    
-    Args:
-        cost_price: себестоимость
-        commission_percent: комиссия WB в %
-        logistics: логистика в рублях
-        target_margin: целевая маржа в %
-        current_discount: текущая скидка в %
-        max_discount: максимально допустимая скидка
-        max_discount_change: максимальное изменение скидки за раз
-        keep_discount: если True - не менять скидку вообще
-        buyout_rate: процент выкупа (0.90 = 90%)
-    """
+    """Считает рекомендуемую цену исходя из целевой маржи"""
 
     commission_rate = commission_percent / 100
     margin_rate = target_margin / 100
     return_rate = 1 - buyout_rate
     returns_cost = logistics * return_rate
 
-    denominator = 1 - commission_rate - ACQUIRING - TAX_RATE - margin_rate
+    denominator = 1 - commission_rate - ACQUIRING - tax_rate - margin_rate
 
     if denominator <= 0:
         return None
 
-    # Цена покупателя (со скидкой)
     price_with_discount = (logistics + returns_cost + cost_price) / denominator
 
-    # Определяем скидку
     if keep_discount:
         new_discount = current_discount
     else:
@@ -86,17 +70,15 @@ def calculate_recommended_price(
         else:
             new_discount = target_discount
 
-    # Цена без скидки
     if new_discount > 0 and new_discount < 100:
         price_without_discount = price_with_discount / (1 - new_discount / 100)
     else:
         price_without_discount = price_with_discount
 
-    # Округляем до красивых цифр (кратно 10)
     price_without_discount = round(price_without_discount / 10) * 10
     price_with_discount = price_without_discount * (1 - new_discount / 100)
 
-    result = calculate_current_profit(price_with_discount, commission_percent, logistics, cost_price, buyout_rate)
+    result = calculate_current_profit(price_with_discount, commission_percent, logistics, cost_price, buyout_rate, tax_rate)
     result["price_without_discount"] = price_without_discount
     result["price_with_discount"] = price_with_discount
     result["discount_percent"] = new_discount
@@ -119,10 +101,7 @@ def get_status(current_margin, target_margin):
 
 
 def get_commission_by_category(subject_name, model="FBO"):
-    """
-    Возвращает примерную комиссию по категории с учётом модели
-    (запасной вариант если API не отдал)
-    """
+    """Возвращает примерную комиссию по категории с учётом модели"""
 
     commissions_fbo = {
         "одежда": 24.5,
@@ -160,7 +139,6 @@ def get_commission_by_category(subject_name, model="FBO"):
 
     for key, value in commissions_fbo.items():
         if key in subject_lower:
-            # FBS обычно на 4-5% ниже
             if model == "FBS":
                 return max(value - 4, 10)
             return value
@@ -169,11 +147,7 @@ def get_commission_by_category(subject_name, model="FBO"):
 
 
 def estimate_logistics(volume_liters, model="FBO"):
-    """
-    Оценка логистики по объёму
-    FBO — со склада WB
-    FBS — со склада продавца (обычно дороже)
-    """
+    """Оценка логистики по объёму"""
 
     if not volume_liters or volume_liters <= 0:
         base = 65.0
@@ -188,7 +162,6 @@ def estimate_logistics(volume_liters, model="FBO"):
     else:
         base = 120.0 + (volume_liters - 20) * 5
 
-    # FBS обычно на 20-30% дороже (из-за забора от продавца)
     if model == "FBS":
         base = base * 1.25
 
