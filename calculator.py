@@ -4,17 +4,16 @@
 
 
 TAX_RATE = 0.06  # УСН 6%
-BUYOUT_RATE = 0.90  # % выкупа
 ACQUIRING = 0.015  # Эквайринг 1.5%
 
 
-def calculate_current_profit(price_with_discount, commission_percent, logistics, cost_price):
+def calculate_current_profit(price_with_discount, commission_percent, logistics, cost_price, buyout_rate=0.90):
     """Считает текущую прибыль по товару"""
 
     commission = price_with_discount * (commission_percent / 100)
     acquiring = price_with_discount * ACQUIRING
 
-    return_rate = 1 - BUYOUT_RATE
+    return_rate = 1 - buyout_rate
     returns_cost = logistics * return_rate
 
     for_pay = price_with_discount - commission - acquiring - logistics - returns_cost
@@ -45,7 +44,8 @@ def calculate_recommended_price(
     current_discount=0,
     max_discount=30,
     max_discount_change=5,
-    keep_discount=False
+    keep_discount=False,
+    buyout_rate=0.90
 ):
     """
     Считает рекомендуемую цену исходя из целевой маржи
@@ -56,14 +56,15 @@ def calculate_recommended_price(
         logistics: логистика в рублях
         target_margin: целевая маржа в %
         current_discount: текущая скидка в %
-        max_discount: максимально допустимая скидка (например 30%)
-        max_discount_change: максимальное изменение скидки за раз (например 5%)
+        max_discount: максимально допустимая скидка
+        max_discount_change: максимальное изменение скидки за раз
         keep_discount: если True - не менять скидку вообще
+        buyout_rate: процент выкупа (0.90 = 90%)
     """
 
     commission_rate = commission_percent / 100
     margin_rate = target_margin / 100
-    return_rate = 1 - BUYOUT_RATE
+    return_rate = 1 - buyout_rate
     returns_cost = logistics * return_rate
 
     denominator = 1 - commission_rate - ACQUIRING - TAX_RATE - margin_rate
@@ -76,13 +77,10 @@ def calculate_recommended_price(
 
     # Определяем скидку
     if keep_discount:
-        # Оставляем текущую скидку
         new_discount = current_discount
     else:
-        # Ограничиваем максимальной скидкой
         target_discount = min(current_discount, max_discount)
 
-        # Плавное снижение скидки (не больше чем на max_discount_change за раз)
         if current_discount > max_discount:
             new_discount = max(current_discount - max_discount_change, max_discount)
         else:
@@ -98,7 +96,7 @@ def calculate_recommended_price(
     price_without_discount = round(price_without_discount / 10) * 10
     price_with_discount = price_without_discount * (1 - new_discount / 100)
 
-    result = calculate_current_profit(price_with_discount, commission_percent, logistics, cost_price)
+    result = calculate_current_profit(price_with_discount, commission_percent, logistics, cost_price, buyout_rate)
     result["price_without_discount"] = price_without_discount
     result["price_with_discount"] = price_with_discount
     result["discount_percent"] = new_discount
@@ -123,9 +121,9 @@ def get_status(current_margin, target_margin):
 def get_commission_by_category(subject_name, model="FBO"):
     """
     Возвращает примерную комиссию по категории с учётом модели
+    (запасной вариант если API не отдал)
     """
 
-    # Примерные комиссии по крупным категориям WB на 2025
     commissions_fbo = {
         "одежда": 24.5,
         "обувь": 24.5,
@@ -151,6 +149,8 @@ def get_commission_by_category(subject_name, model="FBO"):
         "сад": 20.0,
         "украшен": 25.0,
         "ювелир": 25.0,
+        "набор": 22.0,
+        "опыт": 22.0,
     }
 
     if not subject_name:
