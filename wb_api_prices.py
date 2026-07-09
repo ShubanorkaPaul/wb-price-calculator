@@ -68,7 +68,6 @@ def get_all_cards(api_key):
     all_cards = []
     cursor = {"limit": 100}
 
-    # Задержка перед первым запросом
     time.sleep(2)
 
     while True:
@@ -111,7 +110,6 @@ def get_all_cards(api_key):
                 "nmID": new_cursor.get("nmID")
             }
 
-            # Увеличенная задержка между страницами
             time.sleep(1.5)
 
         except Exception as e:
@@ -158,7 +156,6 @@ def get_prices(api_key):
     offset = 0
     limit = 1000
 
-    # Задержка перед первым запросом (защита от 429)
     time.sleep(5)
 
     while True:
@@ -200,7 +197,6 @@ def get_prices(api_key):
                 break
 
             offset += limit
-            # Увеличенная задержка между страницами
             time.sleep(3)
 
         except Exception as e:
@@ -232,14 +228,13 @@ def get_commissions(api_key):
     """
     Получить комиссии по категориям для всех моделей продажи
     
-    WB возвращает:
-    - kgvpMarketplace      → FBO (Склад WB)
-    - paidStorageKgvp      → FBS (Маркетплейс)
+    ✅ ИСПРАВЛЕНО: правильное соответствие полей WB API:
+    - kgvpMarketplace      → FBS (Маркетплейс) 
+    - paidStorageKgvp      → FBO (Склад WB)
     - kgvpSupplier         → DBS (Витрина)
     - kgvpSupplierExpress  → DBW (Курьер WB)
     """
 
-    # Задержка перед запросом
     time.sleep(3)
 
     url = f"{BASE_COMMON}/api/v1/tariffs/commission"
@@ -261,8 +256,8 @@ def get_commissions(api_key):
             result.append({
                 "subject_id": item.get("subjectID"),
                 "subject_name": item.get("subjectName", ""),
-                "commission_fbo": item.get("kgvpMarketplace", 0),      # FBO — склад WB
-                "commission_fbs": item.get("paidStorageKgvp", 0),      # FBS — маркетплейс
+                "commission_fbo": item.get("paidStorageKgvp", 0),      # FBO — склад WB
+                "commission_fbs": item.get("kgvpMarketplace", 0),      # FBS — маркетплейс
                 "commission_dbs": item.get("kgvpSupplier", 0),         # DBS — витрина
                 "commission_dbw": item.get("kgvpSupplierExpress", 0),  # DBW — курьер WB
             })
@@ -277,8 +272,6 @@ def get_commissions(api_key):
 def get_stocks_by_warehouse(api_key):
     """
     Получить остатки по складам чтобы определить FBO/FBS
-    Товар на складе WB = FBO
-    Товар на складе продавца = FBS
     """
     from datetime import datetime, timedelta
 
@@ -287,7 +280,6 @@ def get_stocks_by_warehouse(api_key):
     url = f"{BASE_STATISTICS}/api/v1/supplier/stocks"
     params = {"dateFrom": date_from}
 
-    # Большая задержка перед запросом остатков (WB очень ограничивает этот endpoint)
     time.sleep(10)
     response, error = make_request("GET", url, api_key, params=params, max_retries=3)
 
