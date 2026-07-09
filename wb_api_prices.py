@@ -19,8 +19,8 @@ def get_headers(api_key):
     return {"Authorization": api_key}
 
 
-def make_request(method, url, api_key, params=None, json_data=None, max_retries=3):
-    """Универсальный запрос с повторными попытками"""
+def make_request(method, url, api_key, params=None, json_data=None, max_retries=5):
+    """Универсальный запрос с повторными попытками и умными задержками"""
 
     for attempt in range(max_retries):
         try:
@@ -35,9 +35,10 @@ def make_request(method, url, api_key, params=None, json_data=None, max_retries=
                 return response, None
 
             if response.status_code == 429:
+                # Прогрессивное ожидание: 30, 60, 90, 120, 150 сек
                 wait_time = 30 * (attempt + 1)
                 if attempt < max_retries - 1:
-                    with st.spinner(f"⏳ WB просит подождать ({wait_time} сек)..."):
+                    with st.spinner(f"⏳ WB ограничил запросы. Ждём {wait_time} сек... (попытка {attempt+2}/{max_retries})"):
                         time.sleep(wait_time)
                     continue
                 return None, "429"
@@ -67,6 +68,9 @@ def get_all_cards(api_key):
     all_cards = []
     cursor = {"limit": 100}
 
+    # Задержка перед первым запросом
+    time.sleep(2)
+
     while True:
         payload = {
             "settings": {
@@ -80,6 +84,12 @@ def get_all_cards(api_key):
         if error:
             if error == "401":
                 st.error("❌ Неверный API ключ или нет прав на 'Контент'")
+            elif error == "429":
+                st.warning("""
+                ⚠️ WB временно ограничил запросы (429).
+                
+                Подожди 3-5 минут и попробуй снова.
+                """)
             else:
                 st.error(f"❌ Ошибка получения карточек: {error}")
             return pd.DataFrame()
@@ -101,7 +111,8 @@ def get_all_cards(api_key):
                 "nmID": new_cursor.get("nmID")
             }
 
-            time.sleep(0.5)
+            # Увеличенная задержка между страницами
+            time.sleep(1.5)
 
         except Exception as e:
             st.error(f"❌ Ошибка парсинга карточек: {e}")
@@ -147,13 +158,31 @@ def get_prices(api_key):
     offset = 0
     limit = 1000
 
+    # Задержка перед первым запросом (защита от 429)
+    time.sleep(5)
+
     while True:
         params = {"limit": limit, "offset": offset}
-        response, error = make_request("GET", url, api_key, params=params)
+        response, error = make_request(
+            "GET", url, api_key,
+            params=params,
+            max_retries=5
+        )
 
         if error:
             if error == "401":
                 st.error("❌ Нет прав 'Цены и скидки' у API ключа")
+            elif error == "429":
+                st.warning("""
+                ⚠️ WB временно ограничил запросы (429 Too Many Requests).
+                
+                **Что делать:**
+                1. Подожди 5-10 минут
+                2. Нажми "🗑️ Очистить кеш" в боковой панели
+                3. Попробуй снова
+                
+                💡 Не жми кнопку "Загрузить" часто — данные кешируются на 30 минут.
+                """)
             else:
                 st.error(f"❌ Ошибка получения цен: {error}")
             return pd.DataFrame()
@@ -171,7 +200,8 @@ def get_prices(api_key):
                 break
 
             offset += limit
-            time.sleep(0.5)
+            # Увеличенная задержка между страницами
+            time.sleep(3)
 
         except Exception as e:
             st.error(f"❌ Ошибка парсинга цен: {e}")
@@ -209,12 +239,17 @@ def get_commissions(api_key):
     - kgvpSupplierExpress  → DBW (Курьер WB)
     """
 
+    # Задержка перед запросом
+    time.sleep(3)
+
     url = f"{BASE_COMMON}/api/v1/tariffs/commission"
     params = {"locale": "ru"}
 
     response, error = make_request("GET", url, api_key, params=params)
 
     if error:
+        if error == "429":
+            st.warning("⚠️ WB ограничил запросы к тарифам. Используем примерные значения.")
         return pd.DataFrame()
 
     try:
@@ -252,10 +287,13 @@ def get_stocks_by_warehouse(api_key):
     url = f"{BASE_STATISTICS}/api/v1/supplier/stocks"
     params = {"dateFrom": date_from}
 
-    time.sleep(2)
-    response, error = make_request("GET", url, api_key, params=params, max_retries=2)
+    # Большая задержка перед запросом остатков (WB очень ограничивает этот endpoint)
+    time.sleep(10)
+    response, error = make_request("GET", url, api_key, params=params, max_retries=3)
 
     if error:
+        if error == "429":
+            st.info("ℹ️ Остатки временно недоступны. Определить FBO/FBS не удалось.")
         return pd.DataFrame()
 
     try:
@@ -316,6 +354,6 @@ def update_prices(api_key, price_updates):
         else:
             results["success"] += len(batch)
 
-        time.sleep(1)
+        time.sleep(2)
 
     return results
