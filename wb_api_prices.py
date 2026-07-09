@@ -199,7 +199,15 @@ def get_prices(api_key):
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_commissions(api_key):
-    """Получить комиссии по категориям"""
+    """
+    Получить комиссии по категориям для всех моделей продажи
+    
+    WB возвращает:
+    - kgvpMarketplace      → FBO (Склад WB)
+    - paidStorageKgvp      → FBS (Маркетплейс)
+    - kgvpSupplier         → DBS (Витрина)
+    - kgvpSupplierExpress  → DBW (Курьер WB)
+    """
 
     url = f"{BASE_COMMON}/api/v1/tariffs/commission"
     params = {"locale": "ru"}
@@ -218,8 +226,10 @@ def get_commissions(api_key):
             result.append({
                 "subject_id": item.get("subjectID"),
                 "subject_name": item.get("subjectName", ""),
-                "commission_fbo": item.get("kgvpMarketplace", 0),
-                "commission_fbs": item.get("kgvpSupplier", 0),
+                "commission_fbo": item.get("kgvpMarketplace", 0),      # FBO — склад WB
+                "commission_fbs": item.get("paidStorageKgvp", 0),      # FBS — маркетплейс
+                "commission_dbs": item.get("kgvpSupplier", 0),         # DBS — витрина
+                "commission_dbw": item.get("kgvpSupplierExpress", 0),  # DBW — курьер WB
             })
 
         return pd.DataFrame(result)
@@ -278,7 +288,6 @@ def determine_model(article, stocks_df):
     if article_stocks.empty:
         return "FBO"
 
-    # Если warehouseName содержит "СЦ" или "Склад продавца" → FBS
     if "warehouseName" in article_stocks.columns:
         warehouses = article_stocks["warehouseName"].astype(str).str.lower()
         if warehouses.str.contains("продавец|фбс|fbs|свой", regex=True).any():
