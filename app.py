@@ -9,7 +9,6 @@ from calculator import (
     get_commission_by_category,
     estimate_logistics,
     TAX_RATE,
-    BUYOUT_RATE,
 )
 from wb_api_prices import (
     get_all_cards,
@@ -118,7 +117,7 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # ======== ВЫБОР МОДЕЛИ РАБОТЫ ========
+    # ======== МОДЕЛЬ РАБОТЫ ========
     st.subheader("🏬 Модель работы")
 
     work_model = st.radio(
@@ -128,7 +127,7 @@ with st.sidebar:
             "🏬 FBO (склад WB)",
             "🔀 Смешанная (авто по остаткам)",
         ],
-        index=0,  # По умолчанию FBS
+        index=0,
         help="Влияет на расчёт комиссии и логистики"
     )
 
@@ -137,10 +136,11 @@ with st.sidebar:
     elif work_model == "🏬 FBO (склад WB)":
         force_model = "FBO"
     else:
-        force_model = None  # авто
+        force_model = None
 
     st.markdown("---")
 
+    # ======== ПАРАМЕТРЫ РАСЧЁТА ========
     st.subheader("🎯 Параметры расчёта")
 
     target_margin = st.slider(
@@ -151,6 +151,23 @@ with st.sidebar:
         step=1,
         key="target_margin"
     )
+
+    buyout_percent = st.slider(
+        "% выкупа",
+        min_value=30,
+        max_value=100,
+        value=90,
+        step=1,
+        key="buyout_percent",
+        help="Средний процент выкупа твоих товаров. Влияет на расчёт возвратов."
+    )
+
+    buyout_rate = buyout_percent / 100
+
+    if buyout_percent < 60:
+        st.warning(f"⚠️ Низкий % выкупа ({buyout_percent}%) — много возвратов, цена будет выше")
+    elif buyout_percent > 90:
+        st.success(f"✅ Высокий % выкупа ({buyout_percent}%)")
 
     st.markdown("---")
 
@@ -192,8 +209,7 @@ with st.sidebar:
             min_value=1,
             max_value=20,
             value=5,
-            step=1,
-            help="Например: было 60% скидка, будет 55% (снизим на 5% сегодня, ещё через день ещё на 5%)"
+            step=1
         )
         keep_discount = False
 
@@ -205,15 +221,16 @@ with st.sidebar:
     st.markdown("---")
 
     st.info(f"""
-    📊 **Расчёт:**
+    📊 **Параметры:**
     - Модель: **{force_model if force_model else "Авто"}**
+    - Маржа: **{target_margin}%**
+    - % выкупа: **{buyout_percent}%**
     - Налог: УСН 6%
-    - % выкупа: {int(BUYOUT_RATE*100)}%
     - Эквайринг: 1.5%
     - Реклама: не учитывается
     - Хранение: не учитывается
     
-    💡 Маржа считается от **цены покупателя**
+    💡 Маржа от **цены покупателя**
     """)
 
     st.markdown("---")
@@ -253,7 +270,6 @@ if not cost_prices:
     st.stop()
 
 
-# Показ результата обновления
 if st.session_state.get("update_result"):
     result = st.session_state["update_result"]
     st.success(f"✅ Отправлено на WB: **{result['success']}** товаров")
@@ -270,8 +286,7 @@ if st.session_state.get("update_result"):
     st.markdown("---")
 
 
-# Инфо
-with st.expander("ℹ️ Как правильно понимать цены, скидки и модель работы"):
+with st.expander("ℹ️ Как правильно понимать цены, скидки и параметры"):
     st.markdown("""
     ### 📊 3 цены в WB:
     
@@ -283,23 +298,23 @@ with st.expander("ℹ️ Как правильно понимать цены, с
     
     ### 💰 От какой цены маржа?
     
-    Маржа считается от **Цены покупателя** — реальных денег, которые платит покупатель.
+    Маржа считается от **Цены покупателя** — реальных денег.
     
-    ### 🛡️ Про безопасность скидок:
+    ### 🏬 Модели работы в WB:
     
-    - **Резкое изменение скидки** (например с 60% на 20%) может отправить товар в **карантин WB**
-    - **Плавное изменение** (по 5% за раз) — безопасно
-    - Рекомендуется снижать скидку постепенно
+    - **FBO** — товар на складе WB, WB доставляет
+    - **FBS** — товар на твоём складе, WB доставляет (Маркетплейс)
+    - **DBS** — товар на твоём складе, ты доставляешь (Витрина)
+    - **DBW** — курьер WB (Экспресс)
     
-    ### 🏬 FBO vs FBS:
+    ⚠️ У каждой модели **своя комиссия**! Мы автоматически берём правильную.
     
-    - **FBO** — товар на складе WB, комиссия обычно 22-25%
-    - **FBS** — товар на твоём складе, комиссия ниже на 4-5%, но логистика дороже
+    ### 🎯 Процент выкупа:
     
-    ⚠️ **Важно:** товар может быть одновременно и на FBO, и на FBS  
-    (например, вернулся после невыкупа и лежит на складе WB, но продаётся по FBS)
-    
-    **Выбери в настройках свою основную модель работы!**
+    - **90%+** — отличный, низкие возвраты
+    - **70-90%** — средний
+    - **50-70%** — много возвратов
+    - **<50%** — цена должна быть выше
     """)
 
 
@@ -349,7 +364,6 @@ if st.session_state["df_results"] is None:
     with st.spinner("📊 Загружаем комиссии по категориям..."):
         commissions_df = get_commissions(api_key)
 
-    # Загружаем остатки только если модель "Авто"
     stocks_df = pd.DataFrame()
     if force_model is None:
         with st.spinner("📦 Определяем модели по остаткам..."):
@@ -363,18 +377,14 @@ if st.session_state["df_results"] is None:
 
     merged["cost_price"] = merged["article"].astype(str).str.strip().map(cost_prices).fillna(0)
 
-    # Определяем модель для каждого товара
     if force_model:
-        # Принудительная модель для всех
         merged["model"] = force_model
     else:
-        # Автоматическое определение по остаткам
         merged["model"] = merged["article"].apply(lambda x: determine_model(x, stocks_df))
 
-    # Комиссия с учётом модели
     if not commissions_df.empty:
         merged = merged.merge(
-            commissions_df[["subject_id", "commission_fbo", "commission_fbs"]],
+            commissions_df[["subject_id", "commission_fbo", "commission_fbs", "commission_dbs", "commission_dbw"]],
             on="subject_id",
             how="left"
         )
@@ -391,8 +401,12 @@ if st.session_state["df_results"] is None:
             lambda row: get_commission_by_category(row["subject"], row["model"]),
             axis=1
         )
+        # Заполняем пустыми чтобы не было ошибок в диагностике
+        merged["commission_fbo"] = 0
+        merged["commission_fbs"] = 0
+        merged["commission_dbs"] = 0
+        merged["commission_dbw"] = 0
 
-    # Логистика с учётом модели
     merged["logistics"] = merged.apply(
         lambda row: estimate_logistics(row["volume_liters"], row["model"]),
         axis=1
@@ -407,7 +421,8 @@ if st.session_state["df_results"] is None:
             price_with_discount=row["discounted_price"] or row["price"],
             commission_percent=row["commission_percent"],
             logistics=row["logistics"],
-            cost_price=row["cost_price"]
+            cost_price=row["cost_price"],
+            buyout_rate=buyout_rate
         )
 
         recommended = calculate_recommended_price(
@@ -418,7 +433,8 @@ if st.session_state["df_results"] is None:
             current_discount=row["discount"] or 0,
             max_discount=max_discount,
             max_discount_change=max_discount_change,
-            keep_discount=keep_discount
+            keep_discount=keep_discount,
+            buyout_rate=buyout_rate
         )
 
         if not recommended:
@@ -441,6 +457,11 @@ if st.session_state["df_results"] is None:
             "model": row["model"],
             "cost_price": row["cost_price"],
             "commission_percent": row["commission_percent"],
+            # Все комиссии для диагностики
+            "commission_fbo": row.get("commission_fbo", 0),
+            "commission_fbs": row.get("commission_fbs", 0),
+            "commission_dbs": row.get("commission_dbs", 0),
+            "commission_dbw": row.get("commission_dbw", 0),
             "logistics": row["logistics"],
             "current_price": row["price"],
             "current_discount": row["discount"] or 0,
@@ -475,11 +496,10 @@ df_results = st.session_state["df_results"]
 st.markdown("---")
 st.header("📊 Результаты")
 
-# Показываем какая модель используется
 if force_model:
-    st.success(f"🏬 Все товары считаются по модели: **{force_model}**")
+    st.success(f"🏬 Модель: **{force_model}** | Маржа: **{target_margin}%** | Выкуп: **{buyout_percent}%**")
 else:
-    st.info("🔀 Модель определяется автоматически по остаткам")
+    st.info(f"🔀 Модель: **Авто** | Маржа: **{target_margin}%** | Выкуп: **{buyout_percent}%**")
 
 total_products = len(df_results)
 losing = df_results[df_results["category"] == "убыточные"]
@@ -498,16 +518,15 @@ with col_m3:
 with col_m4:
     st.metric("🟢 В норме", len(ok))
 
-# Статистика по моделям (только если авто)
 if not force_model:
     fbo_count = len(df_results[df_results["model"] == "FBO"])
     fbs_count = len(df_results[df_results["model"] == "FBS"])
 
     col_mod1, col_mod2 = st.columns(2)
     with col_mod1:
-        st.metric("🏬 FBO (склад WB)", fbo_count)
+        st.metric("🏬 FBO", fbo_count)
     with col_mod2:
-        st.metric("📦 FBS (свой склад)", fbs_count)
+        st.metric("📦 FBS", fbs_count)
 
 st.markdown(f"""
 ### 💰 Потенциал роста прибыли: 
@@ -519,7 +538,6 @@ st.markdown(f"""
 
 st.markdown("---")
 
-# Фильтр по модели только если "Авто"
 if not force_model:
     col_f1, col_f2 = st.columns([2, 1])
 
@@ -575,7 +593,6 @@ st.info(f"📊 Показано: **{len(filtered)}** | Требуют обнов
 # ============ ТАБЛИЦА ============
 
 if len(filtered) > 0:
-    # Если модель фиксированная - не показываем колонку "Модель"
     if force_model:
         display_df = filtered[[
             "status_icon", "article", "subject",
@@ -612,6 +629,45 @@ if len(filtered) > 0:
     st.dataframe(display_df, use_container_width=True, height=500)
 else:
     st.info("Нет товаров в этой категории")
+
+
+# ============ ДИАГНОСТИКА КОМИССИЙ ============
+
+st.markdown("---")
+
+with st.expander("🔍 Диагностика: проверить все комиссии"):
+    st.markdown("""
+    ### Проверь что комиссии соответствуют кабинету WB
+    
+    В WB зайди в **"Тарифы"** → найди свою категорию → сравни:
+    
+    - **Склад WB (FBO), %** ← колонка "FBO"
+    - **Маркетплейс (FBS), %** ← колонка "FBS"  ⭐ основная для тебя
+    - **Витрина (DBS), %** ← колонка "DBS"
+    - **Курьер WB (DBW), %** ← колонка "DBW"
+    """)
+
+    if not df_results.empty:
+        # Уникальные категории (чтобы не дублировать)
+        diag_df = df_results[[
+            "subject", "commission_fbo", "commission_fbs", 
+            "commission_dbs", "commission_dbw",
+            "model", "commission_percent"
+        ]].drop_duplicates(subset=["subject"]).copy()
+
+        diag_df.columns = [
+            "Категория",
+            "FBO %", "FBS % ⭐", "DBS %", "DBW %",
+            "Твоя модель", "Используется %"
+        ]
+
+        st.dataframe(diag_df, use_container_width=True, height=400)
+
+        st.info("""
+        ⭐ **FBS %** — это то, что применяется при работе по модели "Маркетплейс FBS"
+        
+        Если значение не совпадает с кабинетом WB — сообщи!
+        """)
 
 
 # ============ ЭКСПОРТ ============
@@ -697,7 +753,6 @@ else:
         st.warning(f"""
         ⚠️ Внимание! У **{len(big_changes)}** товаров скидка меняется больше чем на 10%.
         Это может отправить товар в карантин WB.
-        Рекомендуем режим "🛡️ Плавно" в настройках.
         """)
 
     preview = to_update[[
