@@ -14,9 +14,7 @@ def calculate_current_profit(price_with_discount, commission_percent, logistics,
     return_rate = 1 - buyout_rate
     returns_cost = logistics * return_rate
 
-    # НОВОЕ: вычитаем платную приёмку
     for_pay = price_with_discount - commission - acquiring - logistics - returns_cost - acceptance_fee
-    
     tax = price_with_discount * tax_rate
     profit = for_pay - cost_price - tax
 
@@ -62,7 +60,6 @@ def calculate_recommended_price(
     if denominator <= 0:
         return None
 
-    # НОВОЕ: добавляем платную приёмку в формулу
     price_with_discount = (logistics + returns_cost + acceptance_fee + cost_price) / denominator
 
     if keep_discount:
