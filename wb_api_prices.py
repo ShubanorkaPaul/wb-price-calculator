@@ -20,7 +20,7 @@ def get_headers(api_key):
 
 
 def make_request(method, url, api_key, params=None, json_data=None, max_retries=5):
-    """Универсальный запрос с повторными попытками и умными задержками"""
+    """Универсальный запрос с повторными попытками"""
 
     for attempt in range(max_retries):
         try:
@@ -82,7 +82,7 @@ def get_all_cards(api_key):
             if error == "401":
                 st.error("❌ Неверный API ключ или нет прав на 'Контент'")
             elif error == "429":
-                st.warning("⚠️ WB временно ограничил запросы (429). Подожди 3-5 минут.")
+                st.warning("⚠️ WB временно ограничил запросы. Подожди 3-5 минут.")
             else:
                 st.error(f"❌ Ошибка получения карточек: {error}")
             return pd.DataFrame()
@@ -208,8 +208,6 @@ def get_prices(api_key):
 def get_commissions(api_key):
     """
     Получить комиссии по категориям
-    
-    Правильное соответствие полей WB API:
     - kgvpMarketplace      → FBS (Маркетплейс)
     - paidStorageKgvp      → FBO (Склад WB)
     - kgvpSupplier         → DBS (Витрина)
@@ -251,7 +249,7 @@ def get_commissions(api_key):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_stocks_by_warehouse(api_key):
-    """Получить остатки по складам"""
+    """Получить остатки по складам с диагностикой"""
     from datetime import datetime, timedelta
 
     date_from = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
@@ -264,15 +262,40 @@ def get_stocks_by_warehouse(api_key):
 
     if error:
         if error == "429":
-            st.info("ℹ️ Остатки временно недоступны.")
+            st.error("""
+            ❌ **WB заблокировал запросы к остаткам (429)**
+            
+            **Что делать:**
+            1. Подожди 3-5 минут
+            2. Нажми "🗑️ Очистить кеш"
+            3. Попробуй снова
+            """)
+        elif error == "401":
+            st.error("❌ Нет прав на 'Статистика' у API ключа")
+        else:
+            st.warning(f"⚠️ Не удалось загрузить остатки: {error}")
         return pd.DataFrame()
 
     try:
         data = response.json()
+        
         if not data:
+            st.info("""
+            ℹ️ **WB вернул пустые остатки** — это нормально для FBS.
+            
+            Калькулятор будет использовать модель из настроек или из твоего Excel файла (колонка "Модель").
+            """)
             return pd.DataFrame()
-        return pd.DataFrame(data)
-    except Exception:
+
+        df = pd.DataFrame(data)
+        
+        if len(df) > 0:
+            st.success(f"✅ Получено остатков: {len(df)} записей")
+        
+        return df
+
+    except Exception as e:
+        st.warning(f"⚠️ Ошибка обработки остатков: {e}")
         return pd.DataFrame()
 
 
@@ -295,14 +318,11 @@ def determine_model(article, stocks_df):
 
 
 def get_available_models(article, stocks_df):
-    """
-    Определяет какие модели доступны для товара по остаткам
-    Возвращает set: {"FBO", "FBS", "DBS"}
-    """
+    """Определяет какие модели доступны для товара по остаткам"""
     available = set()
 
     if stocks_df.empty or "supplierArticle" not in stocks_df.columns:
-        return {"FBO", "FBS"}
+        return set()
 
     article_stocks = stocks_df[stocks_df["supplierArticle"] == article]
 
@@ -320,15 +340,12 @@ def get_available_models(article, stocks_df):
 
     warehouses = article_stocks["warehouseName"].astype(str).str.lower()
 
-    # DBS — витрина
     if warehouses.str.contains("dbs|витрин", regex=True, na=False).any():
         available.add("DBS")
 
-    # FBS — склад продавца
     if warehouses.str.contains("склад продавца|фбс|fbs", regex=True, na=False).any():
         available.add("FBS")
 
-    # FBO — склад WB (все остальные — обычно города)
     wb_warehouses = warehouses[
         ~warehouses.str.contains("dbs|витрин|склад продавца|фбс|fbs", regex=True, na=False)
     ]
