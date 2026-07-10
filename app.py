@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
+import json
 from datetime import datetime
 from calculator import (
     calculate_current_profit,
@@ -42,6 +43,7 @@ st.markdown("""
 if "calc_loaded" not in st.session_state: st.session_state["calc_loaded"] = False
 if "df_results" not in st.session_state: st.session_state["df_results"] = None
 if "cost_prices" not in st.session_state: st.session_state["cost_prices"] = {}
+if "cost_models" not in st.session_state: st.session_state["cost_models"] = {}
 if "show_confirm" not in st.session_state: st.session_state["show_confirm"] = None
 if "to_update_data" not in st.session_state: st.session_state["to_update_data"] = None
 if "update_result" not in st.session_state: st.session_state["update_result"] = None
@@ -59,34 +61,62 @@ with st.sidebar:
     st.markdown("---")
 
     st.subheader("💰 Себестоимость")
+    st.caption("Формат: Артикул | Себестоимость | Модель (опционально)")
     cost_file = st.file_uploader("Excel файл", type=["xlsx", "xls", "csv"])
 
     if cost_file:
         try:
             cost_df = pd.read_csv(cost_file) if cost_file.name.endswith(".csv") else pd.read_excel(cost_file)
             cols = list(cost_df.columns)
-            article_col, cost_col = None, None
+            article_col, cost_col, model_col = None, None, None
+            
             for c in cols:
                 c_lower = str(c).lower().strip()
-                if not article_col and any(k in c_lower for k in ["артикул", "article", "sku"]): article_col = c
-                if not cost_col and any(k in c_lower for k in ["себест", "cost", "закуп"]): cost_col = c
+                if not article_col and any(k in c_lower for k in ["артикул", "article", "sku"]): 
+                    article_col = c
+                if not cost_col and any(k in c_lower for k in ["себест", "cost", "закуп"]): 
+                    cost_col = c
+                if not model_col and any(k in c_lower for k in ["модель", "model", "тип", "схема"]):
+                    model_col = c
 
             if article_col and cost_col:
                 new_costs = {}
+                new_models = {}
+                
                 for _, row in cost_df.iterrows():
                     art = str(row[article_col]).strip()
                     try:
                         cost = float(str(row[cost_col]).replace(",", ".").replace(" ", ""))
-                        if art and art.lower() != "nan" and cost > 0: new_costs[art] = cost
+                        if art and art.lower() != "nan" and cost > 0:
+                            new_costs[art] = cost
+                            
+                            if model_col:
+                                model_val = str(row[model_col]).strip().upper()
+                                if model_val in ["FBS", "FBO", "DBS", "DBW"]:
+                                    new_models[art] = model_val
                     except: pass
+                
                 if new_costs:
                     st.session_state["cost_prices"] = new_costs
+                    st.session_state["cost_models"] = new_models
+                    
                     st.success(f"✅ Загружено {len(new_costs)} товаров")
-            else: st.error("❌ Не найдены колонки")
-        except Exception as e: st.error(f"❌ Ошибка: {e}")
+                    if new_models:
+                        st.info(f"📋 Модели указаны для {len(new_models)} товаров")
+                    else:
+                        st.caption("💡 Можешь добавить колонку 'Модель' в Excel для точности")
+            else: 
+                st.error("❌ Не найдены колонки Артикул и Себестоимость")
+        except Exception as e: 
+            st.error(f"❌ Ошибка: {e}")
 
     saved_costs = st.session_state.get("cost_prices", {})
-    if saved_costs: st.info(f"💾 В памяти: {len(saved_costs)} товаров")
+    saved_models = st.session_state.get("cost_models", {})
+    if saved_costs: 
+        info_text = f"💾 В памяти: {len(saved_costs)} товаров"
+        if saved_models:
+            info_text += f" | Моделей: {len(saved_models)}"
+        st.info(info_text)
     st.markdown("---")
 
     st.subheader("🏬 Модель работы")
@@ -106,7 +136,6 @@ with st.sidebar:
     buyout_percent = st.slider("% выкупа", 30, 100, 90, 1)
     buyout_rate = buyout_percent / 100
     
-    # НОВОЕ: Платная приёмка
     acceptance_fee = st.number_input(
         "Платная приёмка (₽ на ед.)", 
         min_value=0, max_value=500, value=0, step=5,
@@ -164,7 +193,16 @@ if not api_key:
     st.stop()
 
 if not st.session_state.get("cost_prices", {}):
-    st.warning("👈 Загрузи Excel файл с себестоимостью в боковой панели (Артикул | Себестоимость)")
+    st.warning("👈 Загрузи Excel файл с себестоимостью в боковой панели")
+    
+    st.markdown("### 📋 Пример файла:")
+    example_df = pd.DataFrame({
+        "Артикул": ["A123-BLK", "B456-RED", "C789-BLU", "D012"],
+        "Себестоимость": [500, 400, 450, 300],
+        "Модель": ["FBS", "FBS", "DBS", "FBO"]
+    })
+    st.dataframe(example_df, use_container_width=False)
+    st.caption("💡 Колонка 'Модель' опциональна — можно указать FBS/FBO/DBS для точного расчёта")
     st.stop()
 
 if st.session_state.get("update_result"):
@@ -216,11 +254,51 @@ if st.session_state["df_results"] is None:
 
     merged["available_models"] = merged["article"].apply(lambda x: get_available_models(x, stocks_df))
 
+    # ==== УМНОЕ ОПРЕДЕЛЕНИЕ МОДЕЛИ ====
+    saved_models = st.session_state.get("cost_models", {})
+    
+    def determine_final_model(row):
+        """
+        Приоритет:
+        1. Модель из Excel (если указана)
+        2. Модель из WB API (если есть остатки)
+        3. Модель по умолчанию (из настроек)
+        """
+        article = str(row["article"]).strip()
+        
+        if article in saved_models:
+            return saved_models[article], "excel"
+        
+        available = row.get("available_models", set())
+        if available and len(available) > 0:
+            if force_model and force_model in available:
+                return force_model, "wb_stocks"
+            elif not force_model:
+                for m in ["FBS", "FBO", "DBS"]:
+                    if m in available:
+                        return m, "wb_stocks"
+        
+        if force_model:
+            return force_model, "default"
+        else:
+            return "FBO", "default"
+    
+    merged[["model", "model_source"]] = merged.apply(
+        lambda row: pd.Series(determine_final_model(row)), axis=1
+    )
+    
+    # Определяем доступность
     if force_model:
-        merged["model"] = force_model
-        merged["model_available"] = merged["available_models"].apply(lambda x: force_model in x if x else False)
+        def is_available(row):
+            if row["model_source"] == "excel":
+                return row["model"] == force_model
+            elif row["model_source"] == "wb_stocks":
+                return force_model in row.get("available_models", set())
+            else:
+                return True
+        
+        merged["model_available"] = merged.apply(is_available, axis=1)
     else:
-        merged["model"] = merged["article"].apply(lambda x: determine_model(x, stocks_df))
         merged["model_available"] = True
 
     if not commissions_df.empty:
@@ -267,7 +345,9 @@ if st.session_state["df_results"] is None:
 
         results.append({
             "nm_id": row["nm_id"], "article": row["article"], "title": row["title"],
-            "subject": row["subject"], "model": row["model"], "cost_price": row["cost_price"],
+            "subject": row["subject"], "model": row["model"], 
+            "model_source": row.get("model_source", "default"),
+            "cost_price": row["cost_price"],
             "commission_percent": row["commission_percent"], "logistics": row["logistics"],
             "current_price": row["price"], "current_discount": row["discount"] or 0,
             "current_price_final": row["discounted_price"] or row["price"],
@@ -311,7 +391,30 @@ with col_m2: st.metric("🔴 Убыточные", len(losing_df))
 with col_m3: st.metric("🟡 Ниже цели", len(below_target))
 with col_m4: st.metric("🟢 В норме", len(ok))
 
-# НОВОЕ: ДЕТАЛИЗАЦИЯ УБЫТКОВ
+# Источники определения модели
+if force_model and "model_source" in df_results.columns:
+    excel_source = len(df_results[df_results["model_source"] == "excel"])
+    wb_source = len(df_results[df_results["model_source"] == "wb_stocks"])
+    default_source = len(df_results[df_results["model_source"] == "default"])
+    
+    if excel_source > 0 or wb_source > 0 or default_source > 0:
+        with st.expander("🔍 Как определилась модель для товаров"):
+            col_s1, col_s2, col_s3 = st.columns(3)
+            with col_s1:
+                st.metric("📋 Из Excel", excel_source, help="Модель указана в файле себестоимости")
+            with col_s2:
+                st.metric("📦 Из WB API", wb_source, help="Модель определена по остаткам")
+            with col_s3:
+                st.metric("⚙️ По умолчанию", default_source, help="Использована модель из настроек")
+            
+            if default_source > 0:
+                st.warning(f"""
+                ⚠️ Для **{default_source} товаров** модель определена по настройке.
+                
+                Для точности — добавь в Excel колонку **"Модель"** с указанием FBS/FBO/DBS.
+                """)
+
+# Убыточные товары
 if len(losing_df) > 0:
     total_loss_per_unit = abs(losing_df["current_profit"].sum())
     
@@ -323,13 +426,12 @@ if len(losing_df) > 0:
     </div>
     """, unsafe_allow_html=True)
     
-    # Топ-3 самых убыточных
     st.markdown("**Топ-3 самых убыточных товара:**")
     worst = losing_df.sort_values("current_profit").head(3)
     for _, row in worst.iterrows():
         st.write(f"🩸 `{row['article']}` — убыток **{row['current_profit']:.0f} ₽** с каждой продажи (Маржа: {row['current_margin']:.1f}%)")
 
-# НОВОЕ: АНАЛИЗ ПО КАТЕГОРИЯМ
+# Анализ по категориям
 with st.expander("📁 Анализ по категориям (какие ниши тянут вниз)"):
     cat_analysis = df_results.groupby("subject").agg(
         Товаров=("article", "count"),
@@ -340,12 +442,11 @@ with st.expander("📁 Анализ по категориям (какие ниш
     cat_analysis = cat_analysis.sort_values("Средняя_маржа")
     cat_analysis["Средняя_маржа"] = cat_analysis["Средняя_маржа"].round(1)
     
-    # Подсветка категорий
     def color_cat_margin(val):
         color = '#ffcccc' if val < 0 else '#fff4cc' if val < target_margin else '#ccffcc'
         return f'background-color: {color}; color: black'
 
-    st.dataframe(cat_analysis.style.applymap(color_cat_margin, subset=['Средняя_маржа']), use_container_width=True)
+    st.dataframe(cat_analysis.style.map(color_cat_margin, subset=['Средняя_маржа']), use_container_width=True)
 
 st.success(f"💰 **Потенциал роста прибыли:** `+{potential:,.0f} ₽` (если применить все рекомендованные цены)")
 
@@ -364,10 +465,8 @@ with col_f2:
     else:
         model_filter = "Все"
 with col_f3:
-    # НОВОЕ: Выбор строк для пагинации
     rows_per_page = st.selectbox("Показывать по:", [50, 100, 500, "Все"], index=0)
 
-# Применение фильтров
 if filter_choice == "🔴 Убыточные": filtered = losing_df.copy(); filter_name = "убыточные"
 elif filter_choice == "🟡 Ниже цели": filtered = below_target.copy(); filter_name = "ниже цели"
 elif filter_choice == "🟢 В норме": filtered = ok.copy(); filter_name = "в норме"
@@ -407,12 +506,10 @@ if len(filtered) > 0:
     ])
     display_df.columns = cols
 
-    # НОВОЕ: ПАГИНАЦИЯ
     total_items = len(display_df)
     if rows_per_page != "Все":
         total_pages = (total_items - 1) // rows_per_page + 1
         
-        # Кнопки пагинации
         page_col1, page_col2, page_col3, page_col4 = st.columns([1, 1, 2, 6])
         with page_col1:
             if st.button("◀ Назад") and st.session_state["current_page"] > 1:
@@ -431,7 +528,6 @@ if len(filtered) > 0:
     else:
         display_df_page = display_df
 
-    # НОВОЕ: ЦВЕТОВАЯ ИНДИКАЦИЯ ТАБЛИЦЫ
     def highlight_margins(val):
         try:
             v = float(val)
@@ -440,7 +536,7 @@ if len(filtered) > 0:
             else: return 'background-color: #ccffcc; color: black'
         except: return ''
 
-    styled_df = display_df_page.style.applymap(
+    styled_df = display_df_page.style.map(
         highlight_margins, 
         subset=['Маржа %', 'Реком. маржа %']
     ).format(precision=1)
@@ -454,37 +550,236 @@ else:
 # ============ ЭКСПОРТ ============
 
 st.markdown("---")
-st.subheader("📤 Экспорт")
+st.subheader("📤 Экспорт данных")
+st.caption("Скачай отчёт в удобном формате")
 
-col_exp1, col_exp2 = st.columns(2)
+col_exp1, col_exp2, col_exp3, col_exp4 = st.columns(4)
 
 with col_exp1:
     output_excel = io.BytesIO()
     with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
         df_results.to_excel(writer, sheet_name="Все товары", index=False)
         losing_df.to_excel(writer, sheet_name="Убыточные", index=False)
+        below_target.to_excel(writer, sheet_name="Ниже цели", index=False)
+        ok.to_excel(writer, sheet_name="В норме", index=False)
+        
         prices_to_update = df_results[["nm_id", "recommended_price", "recommended_discount"]].copy()
         prices_to_update.columns = ["nmID", "price", "discount"]
         prices_to_update.to_excel(writer, sheet_name="Цены для загрузки", index=False)
 
     st.download_button(
-        label="📥 Скачать Excel (все листы)",
+        label="📊 Excel",
         data=output_excel.getvalue(),
         file_name=f"wb_prices_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True
+        use_container_width=True,
+        help="Excel файл с 5 листами"
     )
 
 with col_exp2:
-    # НОВОЕ: ЭКСПОРТ В CSV
     csv_data = df_results.to_csv(index=False).encode('utf-8-sig')
     st.download_button(
-        label="📥 Скачать CSV",
+        label="📄 CSV",
         data=csv_data,
         file_name=f"wb_prices_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
         mime="text/csv",
-        use_container_width=True
+        use_container_width=True,
+        help="CSV для импорта в Google Sheets, 1С"
     )
+
+with col_exp3:
+    json_export = {
+        "export_date": datetime.now().isoformat(),
+        "total_products": len(df_results),
+        "settings": {
+            "model": force_model if force_model else "auto",
+            "target_margin": target_margin,
+            "buyout_percent": buyout_percent,
+            "tax_rate": tax_rate,
+            "acceptance_fee": acceptance_fee,
+        },
+        "summary": {
+            "losing_count": len(losing_df),
+            "below_target_count": len(below_target),
+            "ok_count": len(ok),
+            "potential_profit": float(potential),
+        },
+        "products": df_results.to_dict(orient="records"),
+    }
+    
+    json_data = json.dumps(json_export, ensure_ascii=False, indent=2, default=str).encode('utf-8')
+    
+    st.download_button(
+        label="🔧 JSON",
+        data=json_data,
+        file_name=f"wb_prices_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
+        mime="application/json",
+        use_container_width=True,
+        help="JSON для API интеграций"
+    )
+
+with col_exp4:
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import cm
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+        from reportlab.lib.enums import TA_CENTER
+        
+        try:
+            pdfmetrics.registerFont(TTFont('DejaVuSans', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))
+            pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'))
+            base_font = 'DejaVuSans'
+            bold_font = 'DejaVuSans-Bold'
+        except:
+            base_font = 'Helvetica'
+            bold_font = 'Helvetica-Bold'
+        
+        pdf_buffer = io.BytesIO()
+        doc = SimpleDocTemplate(
+            pdf_buffer, pagesize=landscape(A4),
+            rightMargin=1*cm, leftMargin=1*cm,
+            topMargin=1*cm, bottomMargin=1*cm
+        )
+        
+        elements = []
+        styles = getSampleStyleSheet()
+        
+        title_style = ParagraphStyle('CustomTitle', parent=styles['Title'],
+            fontName=bold_font, fontSize=22, textColor=colors.HexColor('#1e40af'),
+            alignment=TA_CENTER, spaceAfter=20)
+        h2_style = ParagraphStyle('CustomH2', parent=styles['Heading2'],
+            fontName=bold_font, fontSize=14, textColor=colors.HexColor('#374151'),
+            spaceAfter=10, spaceBefore=15)
+        normal_style = ParagraphStyle('CustomNormal', parent=styles['Normal'],
+            fontName=base_font, fontSize=10, spaceAfter=6)
+        
+        elements.append(Paragraph("Отчёт по анализу цен Wildberries", title_style))
+        elements.append(Paragraph(f"Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}", normal_style))
+        elements.append(Spacer(1, 0.5*cm))
+        
+        elements.append(Paragraph("Параметры расчёта", h2_style))
+        params_data = [
+            ["Параметр", "Значение"],
+            ["Модель работы", force_model if force_model else "Смешанная"],
+            ["Целевая маржа", f"{target_margin}%"],
+            ["% выкупа", f"{buyout_percent}%"],
+            ["Налог", tax_mode],
+            ["Платная приёмка", f"{acceptance_fee} ₽" if acceptance_fee > 0 else "не учитывается"],
+        ]
+        params_table = Table(params_data, colWidths=[6*cm, 8*cm])
+        params_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3B82F6')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), bold_font),
+            ('FONTNAME', (0, 1), (-1, -1), base_font),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('PADDING', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ]))
+        elements.append(params_table)
+        elements.append(Spacer(1, 0.5*cm))
+        
+        elements.append(Paragraph("Общая статистика", h2_style))
+        stats_data = [
+            ["Показатель", "Значение"],
+            ["Всего товаров", str(total_products)],
+            ["Убыточных", str(len(losing_df))],
+            ["Ниже цели", str(len(below_target))],
+            ["В норме", str(len(ok))],
+            ["Потенциал прибыли", f"+{potential:,.0f} ₽".replace(",", " ")],
+        ]
+        stats_table = Table(stats_data, colWidths=[10*cm, 6*cm])
+        stats_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#10B981')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), bold_font),
+            ('FONTNAME', (0, 1), (-1, -1), base_font),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('PADDING', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ]))
+        elements.append(stats_table)
+        
+        if len(losing_df) > 0:
+            elements.append(PageBreak())
+            elements.append(Paragraph(f"Убыточные товары ({len(losing_df)} шт)", h2_style))
+            losing_data = [["Артикул", "Категория", "Цена", "Маржа", "Убыток", "Реком.", "Реком.маржа"]]
+            for _, row in losing_df.head(30).iterrows():
+                losing_data.append([
+                    str(row["article"])[:20], str(row["subject"])[:20],
+                    f"{row['current_price_final']:.0f}", f"{row['current_margin']:.1f}%",
+                    f"{row['current_profit']:.0f}", f"{row['recommended_final']:.0f}",
+                    f"{row['recommended_margin']:.1f}%",
+                ])
+            losing_table = Table(losing_data, colWidths=[3.5*cm, 3.5*cm, 2.5*cm, 2.5*cm, 2.5*cm, 3*cm, 3*cm])
+            losing_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#EF4444')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('FONTNAME', (0, 0), (-1, 0), bold_font),
+                ('FONTNAME', (0, 1), (-1, -1), base_font),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('PADDING', (0, 0), (-1, -1), 5),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ]))
+            elements.append(losing_table)
+        
+        elements.append(PageBreak())
+        elements.append(Paragraph("Анализ по категориям", h2_style))
+        cat_stats = df_results.groupby("subject").agg(
+            count=("article", "count"),
+            avg_margin=("current_margin", "mean"),
+            losing=("category", lambda x: (x == "убыточные").sum())
+        ).reset_index().sort_values("avg_margin")
+        
+        cat_data = [["Категория", "Товаров", "Ср. маржа", "Убыточных"]]
+        for _, row in cat_stats.head(20).iterrows():
+            cat_data.append([
+                str(row["subject"])[:35], str(row["count"]),
+                f"{row['avg_margin']:.1f}%", str(row["losing"]),
+            ])
+        cat_table = Table(cat_data, colWidths=[9*cm, 3*cm, 4*cm, 3*cm])
+        cat_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#8B5CF6')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), bold_font),
+            ('FONTNAME', (0, 1), (-1, -1), base_font),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('PADDING', (0, 0), (-1, -1), 6),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ]))
+        elements.append(cat_table)
+        
+        doc.build(elements)
+        pdf_data = pdf_buffer.getvalue()
+        pdf_buffer.close()
+        
+        st.download_button(
+            label="📕 PDF-отчёт",
+            data=pdf_data,
+            file_name=f"wb_report_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+            help="Красивый PDF-отчёт"
+        )
+    except ImportError:
+        st.button("📕 PDF", disabled=True, use_container_width=True, help="Требуется reportlab в requirements.txt")
+    except Exception as e:
+        st.button("📕 PDF", disabled=True, use_container_width=True, help=f"Ошибка: {str(e)[:100]}")
+
+
+with st.expander("💡 Какой формат для чего использовать?"):
+    st.markdown("""
+    - **📊 Excel** — полный анализ, 5 листов (все, убыточные, ниже цели, в норме, цены для загрузки)
+    - **📄 CSV** — импорт в Google Sheets, 1С, МойСклад
+    - **🔧 JSON** — программные интеграции, API
+    - **📕 PDF** — отчёты для клиентов и презентаций
+    
+    **Google Sheets:** скачай CSV или Excel → Файл → Импорт (30 секунд)
+    """)
 
 
 # ============ ОБНОВЛЕНИЕ ЦЕН ============
@@ -512,7 +807,7 @@ if st.session_state["show_confirm"] is None:
             (df_results["current_discount"] != df_results["recommended_discount"])
         ]
         if st.button(
-            f"⚡ Обновить ВООБЩЕ ВСЕ ({len(all_to_update)})",
+            f"⚡ Обновить ВСЕ ({len(all_to_update)})",
             use_container_width=True, disabled=(len(all_to_update) == 0)
         ):
             st.session_state["show_confirm"] = "all"
