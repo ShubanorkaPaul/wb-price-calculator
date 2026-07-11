@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import io
 import json
+import gc
 from datetime import datetime
 from calculator import (
     calculate_current_profit,
@@ -181,6 +182,7 @@ with st.sidebar:
         st.session_state["to_update_data"] = None
         st.session_state["skipped_no_stock"] = 0
         st.session_state["current_page"] = 1
+        gc.collect()
         st.rerun()
 
 
@@ -258,12 +260,6 @@ if st.session_state["df_results"] is None:
     saved_models = st.session_state.get("cost_models", {})
     
     def determine_final_model(row):
-        """
-        Приоритет:
-        1. Модель из Excel (если указана)
-        2. Модель из WB API (если есть остатки)
-        3. Модель по умолчанию (из настроек)
-        """
         article = str(row["article"]).strip()
         
         if article in saved_models:
@@ -287,7 +283,6 @@ if st.session_state["df_results"] is None:
         lambda row: pd.Series(determine_final_model(row)), axis=1
     )
     
-    # Определяем доступность
     if force_model:
         def is_available(row):
             if row["model_source"] == "excel":
@@ -369,6 +364,10 @@ if st.session_state["df_results"] is None:
 
     st.session_state["df_results"] = pd.DataFrame(results)
     st.session_state["skipped_no_stock"] = skipped_no_stock
+    
+    # Освобождаем память после расчёта
+    del cards_df, prices_df, commissions_df, stocks_df, merged, results
+    gc.collect()
 
 
 df_results = st.session_state["df_results"]
@@ -553,7 +552,7 @@ st.markdown("---")
 st.subheader("📤 Экспорт данных")
 st.caption("Скачай отчёт в удобном формате")
 
-col_exp1, col_exp2, col_exp3, col_exp4 = st.columns(4)
+col_exp1, col_exp2, col_exp3 = st.columns(3)
 
 with col_exp1:
     output_excel = io.BytesIO()
@@ -618,167 +617,17 @@ with col_exp3:
         help="JSON для API интеграций"
     )
 
-with col_exp4:
-    try:
-        from reportlab.lib import colors
-        from reportlab.lib.pagesizes import A4, landscape
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib.units import cm
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
-        from reportlab.lib.enums import TA_CENTER
-        
-        try:
-            pdfmetrics.registerFont(TTFont('DejaVuSans', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'))
-            pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'))
-            base_font = 'DejaVuSans'
-            bold_font = 'DejaVuSans-Bold'
-        except:
-            base_font = 'Helvetica'
-            bold_font = 'Helvetica-Bold'
-        
-        pdf_buffer = io.BytesIO()
-        doc = SimpleDocTemplate(
-            pdf_buffer, pagesize=landscape(A4),
-            rightMargin=1*cm, leftMargin=1*cm,
-            topMargin=1*cm, bottomMargin=1*cm
-        )
-        
-        elements = []
-        styles = getSampleStyleSheet()
-        
-        title_style = ParagraphStyle('CustomTitle', parent=styles['Title'],
-            fontName=bold_font, fontSize=22, textColor=colors.HexColor('#1e40af'),
-            alignment=TA_CENTER, spaceAfter=20)
-        h2_style = ParagraphStyle('CustomH2', parent=styles['Heading2'],
-            fontName=bold_font, fontSize=14, textColor=colors.HexColor('#374151'),
-            spaceAfter=10, spaceBefore=15)
-        normal_style = ParagraphStyle('CustomNormal', parent=styles['Normal'],
-            fontName=base_font, fontSize=10, spaceAfter=6)
-        
-        elements.append(Paragraph("Отчёт по анализу цен Wildberries", title_style))
-        elements.append(Paragraph(f"Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}", normal_style))
-        elements.append(Spacer(1, 0.5*cm))
-        
-        elements.append(Paragraph("Параметры расчёта", h2_style))
-        params_data = [
-            ["Параметр", "Значение"],
-            ["Модель работы", force_model if force_model else "Смешанная"],
-            ["Целевая маржа", f"{target_margin}%"],
-            ["% выкупа", f"{buyout_percent}%"],
-            ["Налог", tax_mode],
-            ["Платная приёмка", f"{acceptance_fee} ₽" if acceptance_fee > 0 else "не учитывается"],
-        ]
-        params_table = Table(params_data, colWidths=[6*cm, 8*cm])
-        params_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3B82F6')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('FONTNAME', (0, 0), (-1, 0), bold_font),
-            ('FONTNAME', (0, 1), (-1, -1), base_font),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('PADDING', (0, 0), (-1, -1), 8),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ]))
-        elements.append(params_table)
-        elements.append(Spacer(1, 0.5*cm))
-        
-        elements.append(Paragraph("Общая статистика", h2_style))
-        stats_data = [
-            ["Показатель", "Значение"],
-            ["Всего товаров", str(total_products)],
-            ["Убыточных", str(len(losing_df))],
-            ["Ниже цели", str(len(below_target))],
-            ["В норме", str(len(ok))],
-            ["Потенциал прибыли", f"+{potential:,.0f} ₽".replace(",", " ")],
-        ]
-        stats_table = Table(stats_data, colWidths=[10*cm, 6*cm])
-        stats_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#10B981')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('FONTNAME', (0, 0), (-1, 0), bold_font),
-            ('FONTNAME', (0, 1), (-1, -1), base_font),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('PADDING', (0, 0), (-1, -1), 8),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ]))
-        elements.append(stats_table)
-        
-        if len(losing_df) > 0:
-            elements.append(PageBreak())
-            elements.append(Paragraph(f"Убыточные товары ({len(losing_df)} шт)", h2_style))
-            losing_data = [["Артикул", "Категория", "Цена", "Маржа", "Убыток", "Реком.", "Реком.маржа"]]
-            for _, row in losing_df.head(30).iterrows():
-                losing_data.append([
-                    str(row["article"])[:20], str(row["subject"])[:20],
-                    f"{row['current_price_final']:.0f}", f"{row['current_margin']:.1f}%",
-                    f"{row['current_profit']:.0f}", f"{row['recommended_final']:.0f}",
-                    f"{row['recommended_margin']:.1f}%",
-                ])
-            losing_table = Table(losing_data, colWidths=[3.5*cm, 3.5*cm, 2.5*cm, 2.5*cm, 2.5*cm, 3*cm, 3*cm])
-            losing_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#EF4444')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                ('FONTNAME', (0, 0), (-1, 0), bold_font),
-                ('FONTNAME', (0, 1), (-1, -1), base_font),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
-                ('PADDING', (0, 0), (-1, -1), 5),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ]))
-            elements.append(losing_table)
-        
-        elements.append(PageBreak())
-        elements.append(Paragraph("Анализ по категориям", h2_style))
-        cat_stats = df_results.groupby("subject").agg(
-            count=("article", "count"),
-            avg_margin=("current_margin", "mean"),
-            losing=("category", lambda x: (x == "убыточные").sum())
-        ).reset_index().sort_values("avg_margin")
-        
-        cat_data = [["Категория", "Товаров", "Ср. маржа", "Убыточных"]]
-        for _, row in cat_stats.head(20).iterrows():
-            cat_data.append([
-                str(row["subject"])[:35], str(row["count"]),
-                f"{row['avg_margin']:.1f}%", str(row["losing"]),
-            ])
-        cat_table = Table(cat_data, colWidths=[9*cm, 3*cm, 4*cm, 3*cm])
-        cat_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#8B5CF6')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('FONTNAME', (0, 0), (-1, 0), bold_font),
-            ('FONTNAME', (0, 1), (-1, -1), base_font),
-            ('FONTSIZE', (0, 0), (-1, -1), 9),
-            ('PADDING', (0, 0), (-1, -1), 6),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ]))
-        elements.append(cat_table)
-        
-        doc.build(elements)
-        pdf_data = pdf_buffer.getvalue()
-        pdf_buffer.close()
-        
-        st.download_button(
-            label="📕 PDF-отчёт",
-            data=pdf_data,
-            file_name=f"wb_report_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
-            mime="application/pdf",
-            use_container_width=True,
-            help="Красивый PDF-отчёт"
-        )
-    except ImportError:
-        st.button("📕 PDF", disabled=True, use_container_width=True, help="Требуется reportlab в requirements.txt")
-    except Exception as e:
-        st.button("📕 PDF", disabled=True, use_container_width=True, help=f"Ошибка: {str(e)[:100]}")
-
 
 with st.expander("💡 Какой формат для чего использовать?"):
     st.markdown("""
-    - **📊 Excel** — полный анализ, 5 листов (все, убыточные, ниже цели, в норме, цены для загрузки)
+    - **📊 Excel** — полный анализ, 5 листов (все товары, убыточные, ниже цели, в норме, цены для загрузки)
     - **📄 CSV** — импорт в Google Sheets, 1С, МойСклад
     - **🔧 JSON** — программные интеграции, API
-    - **📕 PDF** — отчёты для клиентов и презентаций
     
     **Google Sheets:** скачай CSV или Excel → Файл → Импорт (30 секунд)
+    
+    ℹ️ **PDF временно отключён** для экономии памяти сервера.
+    Вернём при апгрейде на платный план Render.
     """)
 
 
