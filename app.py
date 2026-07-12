@@ -3,6 +3,7 @@ import pandas as pd
 import io
 import json
 import gc
+import time
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
@@ -22,6 +23,7 @@ from wb_api_prices import (
     determine_model,
     get_available_models,
     update_prices,
+    load_all_data_parallel,
 )
 
 
@@ -37,12 +39,10 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Основные цвета и шрифты */
     html, body, [class*="css"] {
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
     
-    /* Главный заголовок */
     h1 {
         color: #1E40AF !important;
         font-weight: 700 !important;
@@ -62,7 +62,6 @@ st.markdown("""
         font-weight: 600 !important;
     }
     
-    /* Карточки метрик */
     [data-testid="stMetric"] {
         background: linear-gradient(135deg, #FFFFFF 0%, #F9FAFB 100%);
         padding: 20px;
@@ -91,7 +90,6 @@ st.markdown("""
         font-weight: 700 !important;
     }
     
-    /* Кнопки */
     .stButton > button {
         border-radius: 8px !important;
         font-weight: 600 !important;
@@ -104,51 +102,43 @@ st.markdown("""
         box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     }
     
-    /* Primary кнопки */
     [data-testid="baseButton-primary"] {
         background: linear-gradient(135deg, #3B82F6 0%, #2563EB 100%) !important;
         color: white !important;
     }
     
-    /* Alerts */
     [data-testid="stAlert"] {
         border-radius: 10px !important;
         border-left-width: 5px !important;
         padding: 15px 20px !important;
     }
     
-    /* Success alert */
     [data-testid="stAlert"][kind="success"] {
         background-color: #D1FAE5 !important;
         border-left-color: #10B981 !important;
     }
     
-    /* Warning alert */
     [data-testid="stAlert"][kind="warning"] {
         background-color: #FEF3C7 !important;
         border-left-color: #F59E0B !important;
     }
     
-    /* Error alert */
     [data-testid="stAlert"][kind="error"] {
         background-color: #FEE2E2 !important;
         border-left-color: #EF4444 !important;
     }
     
-    /* Info alert */
     [data-testid="stAlert"][kind="info"] {
         background-color: #DBEAFE !important;
         border-left-color: #3B82F6 !important;
     }
     
-    /* Таблицы */
     [data-testid="stDataFrame"] {
         border-radius: 10px;
         overflow: hidden;
         box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     }
     
-    /* Боковая панель */
     [data-testid="stSidebar"] {
         background: linear-gradient(180deg, #F9FAFB 0%, #F3F4F6 100%);
     }
@@ -164,7 +154,6 @@ st.markdown("""
         font-size: 16px !important;
     }
     
-    /* Разделители */
     hr {
         border: none;
         height: 1px;
@@ -172,7 +161,6 @@ st.markdown("""
         margin: 20px 0;
     }
     
-    /* Загрузка файлов */
     [data-testid="stFileUploader"] {
         border: 2px dashed #D1D5DB;
         border-radius: 10px;
@@ -180,7 +168,6 @@ st.markdown("""
         background-color: #F9FAFB;
     }
     
-    /* Expander */
     [data-testid="stExpander"] {
         border-radius: 10px !important;
         border: 1px solid #E5E7EB !important;
@@ -188,7 +175,6 @@ st.markdown("""
         box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
     
-    /* Кастомные боксы */
     .loss-box {
         background: linear-gradient(135deg, #FEE2E2 0%, #FECACA 100%);
         padding: 20px;
@@ -219,7 +205,6 @@ st.markdown("""
         margin-bottom: 15px;
     }
     
-    /* Кастомный header */
     .main-header {
         background: linear-gradient(135deg, #3B82F6 0%, #1E40AF 100%);
         padding: 25px 30px;
@@ -243,7 +228,6 @@ st.markdown("""
         font-size: 14px !important;
     }
     
-    /* Плавная анимация */
     * {
         transition: background-color 0.15s ease;
     }
@@ -339,6 +323,17 @@ with st.sidebar:
     if work_model == "📦 FBS (Маркетплейс)": force_model = "FBS"
     elif work_model == "🏬 FBO (Склад WB)": force_model = "FBO"
     else: force_model = None
+    
+    # Опция загрузки остатков
+    if work_model != "🔀 Смешанная (авто)":
+        load_stocks_option = st.checkbox(
+            "📦 Загружать остатки WB", 
+            value=False,
+            help="Замедляет загрузку на 30-60 сек. Не нужно если работаешь только по FBS."
+        )
+    else:
+        load_stocks_option = True
+        st.info("💡 Для авто-режима остатки обязательны")
 
     st.markdown("---")
 
@@ -371,15 +366,49 @@ with st.sidebar:
     st.markdown("---")
 
     st.subheader("🎁 Скидка")
-    discount_mode = st.radio("Как менять скидку?", ["🛡️ Плавно", "🎯 Установить максимум", "🔒 Не менять"], index=0)
-    if discount_mode == "🎯 Установить максимум":
-        max_discount, max_discount_change, keep_discount = st.slider("Макс. скидка, %", 0, 90, 30, 5), 100, False
-    elif discount_mode == "🛡️ Плавно":
-        max_discount = st.slider("Целевая скидка, %", 0, 90, 30, 5)
-        max_discount_change = st.slider("Макс. изменение за раз, %", 1, 20, 5, 1)
+    st.caption("💡 Ограничивает 'перечёркнутую цену' от завышения")
+    
+    discount_mode = st.radio(
+        "Режим скидки:",
+        ["🛡️ Плавно снижать", "🎯 Установить сразу", "🔒 Не менять"],
+        index=0,
+        help="Плавно — снижаем скидку постепенно (безопасно от карантина). Установить — резко ставим желаемую. Не менять — оставляем как есть."
+    )
+    
+    if discount_mode == "🎯 Установить сразу":
+        max_discount = st.slider(
+            "Разумная скидка, %", 
+            0, 60, 30, 5,
+            help="Максимальная 'перечёркнутая цена' будет = 1.43x от реальной (при скидке 30%)"
+        )
+        max_discount_change = 100
         keep_discount = False
+        
+        if max_discount > 0:
+            multiplier = 1 / (1 - max_discount / 100)
+            st.caption(f"📊 Цена до скидки будет максимум в {multiplier:.2f}x раз выше цены для покупателя")
+        
+    elif discount_mode == "🛡️ Плавно снижать":
+        max_discount = st.slider(
+            "Целевая разумная скидка, %", 
+            0, 60, 30, 5,
+            help="Итоговая скидка, к которой стремимся"
+        )
+        max_discount_change = st.slider(
+            "Макс. снижение за раз, %", 
+            1, 20, 5, 1,
+            help="На сколько % можно снизить скидку за одно применение (защита от карантина)"
+        )
+        keep_discount = False
+        
+        st.caption(f"💡 Если сейчас скидка 60% — за 6 применений дойдёт до {max_discount}% (по {max_discount_change}%)")
+        
     else:
-        max_discount, max_discount_change, keep_discount = 100, 0, True
+        max_discount = 100
+        max_discount_change = 0
+        keep_discount = True
+        st.info("🔒 Скидка не изменится. Цена накрутится под текущую скидку.")
+        st.warning("⚠️ Если текущая скидка > 50%, цена до скидки может быть завышенной!")
 
     st.markdown("---")
     if st.button("🗑️ Очистить кеш и данные", use_container_width=True):
@@ -396,7 +425,6 @@ with st.sidebar:
 
 # ============ ГЛАВНАЯ ============
 
-# Красивый header
 st.markdown("""
 <div class="main-header">
     <h1>🧮 Умный калькулятор цен WB</h1>
@@ -437,7 +465,7 @@ col1, col2 = st.columns([1, 3])
 with col1:
     load_button = st.button("🚀 Загрузить и рассчитать", type="primary", use_container_width=True)
 with col2:
-    st.info("⏱️ Загрузка 1-3 минуты. Данные кешируются.")
+    st.info("⚡ Быстрая загрузка: 30-60 сек | Повторно: 1-2 сек (из кеша)")
 
 if load_button:
     st.session_state["calc_loaded"] = True
@@ -448,22 +476,43 @@ if not st.session_state["calc_loaded"]:
     st.stop()
 
 
-# ============ РАСЧЁТ ============
+# ============ РАСЧЁТ С ПАРАЛЛЕЛЬНОЙ ЗАГРУЗКОЙ ============
 
 if st.session_state["df_results"] is None:
-    with st.spinner("📥 Загружаем карточки товаров..."):
-        cards_df = get_all_cards(api_key)
-    if cards_df.empty: st.error("❌ Ошибка"); st.stop()
-
-    with st.spinner("💰 Загружаем цены..."):
-        prices_df = get_prices(api_key)
-    if prices_df.empty: st.error("❌ Ошибка"); st.stop()
-
-    with st.spinner("📊 Загружаем комиссии..."):
-        commissions_df = get_commissions(api_key)
-
-    with st.spinner("📦 Загружаем остатки по складам..."):
-        stocks_df = get_stocks_by_warehouse(api_key)
+    progress = st.progress(0, text="🚀 Запускаем параллельную загрузку...")
+    
+    start_time = time.time()
+    
+    progress.progress(10, text="📥 Загружаем карточки, цены и комиссии одновременно...")
+    
+    all_data = load_all_data_parallel(api_key, load_stocks=load_stocks_option)
+    
+    progress.progress(70, text="✅ Основные данные загружены!")
+    
+    cards_df = all_data["cards"]
+    prices_df = all_data["prices"]
+    commissions_df = all_data["commissions"]
+    stocks_df = all_data["stocks"]
+    
+    if cards_df.empty:
+        progress.empty()
+        st.error("❌ Не удалось загрузить карточки")
+        st.stop()
+    
+    if prices_df.empty:
+        progress.empty()
+        st.error("❌ Не удалось загрузить цены")
+        st.stop()
+    
+    if load_stocks_option:
+        progress.progress(90, text="📦 Остатки загружены")
+    
+    elapsed = time.time() - start_time
+    progress.progress(100, text=f"⚡ Загружено за {elapsed:.1f} секунд!")
+    time.sleep(1)
+    progress.empty()
+    
+    st.success(f"✅ Данные загружены за **{elapsed:.1f} сек** ({len(cards_df)} товаров)")
 
     merged = cards_df.merge(prices_df[["nm_id", "price", "discount", "discounted_price"]], on="nm_id", how="left")
     merged["cost_price"] = merged["article"].astype(str).str.strip().map(st.session_state["cost_prices"]).fillna(0)
@@ -556,7 +605,6 @@ if st.session_state["df_results"] is None:
             "current_price": row["price"], "current_discount": row["discount"] or 0,
             "current_price_final": row["discounted_price"] or row["price"],
             "current_profit": current["profit"], "current_margin": current["margin"],
-            # Компоненты расходов для графиков
             "commission_rub": current["commission"],
             "logistics_rub": current["logistics"],
             "acquiring_rub": current["acquiring"],
@@ -612,7 +660,6 @@ st.subheader("📈 Визуальный анализ")
 
 col_g1, col_g2 = st.columns(2)
 
-# График 1: Donut chart статусов
 with col_g1:
     st.markdown("##### 🎯 Распределение товаров по статусам")
     
@@ -645,8 +692,6 @@ with col_g1:
     
     st.plotly_chart(fig_donut, use_container_width=True)
 
-
-# График 2: Гистограмма распределения маржи
 with col_g2:
     st.markdown("##### 📊 Распределение маржи по товарам")
     
@@ -658,7 +703,6 @@ with col_g2:
         color_discrete_sequence=['#3B82F6']
     )
     
-    # Добавляем вертикальные линии
     fig_hist.add_vline(x=0, line_dash="dash", line_color="red", 
                        annotation_text="Убыток", annotation_position="top")
     fig_hist.add_vline(x=target_margin, line_dash="dash", line_color="green", 
@@ -680,7 +724,6 @@ with col_g2:
     st.plotly_chart(fig_hist, use_container_width=True)
 
 
-# График 3: ТОП-10 прибыльных
 col_g3, col_g4 = st.columns(2)
 
 with col_g3:
@@ -717,7 +760,6 @@ with col_g3:
     st.plotly_chart(fig_top, use_container_width=True)
 
 
-# График 4: ТОП убыточных
 with col_g4:
     st.markdown("##### 🚨 ТОП-10 самых убыточных")
     
@@ -756,7 +798,6 @@ with col_g4:
         st.success("🎉 Нет убыточных товаров!")
 
 
-# График 5: Круговая диаграмма расходов
 st.markdown("##### 🥧 Куда уходят деньги (в среднем на один товар)")
 
 avg_commission = df_results["commission_rub"].mean()
