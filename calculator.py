@@ -50,11 +50,7 @@ def calculate_recommended_price(
 ):
     """
     Считает рекомендуемую цену исходя из целевой маржи.
-    
-    ГЛАВНОЕ ИСПРАВЛЕНИЕ:
-    - Скидка ограничивается max_discount
-    - Цена до скидки НЕ будет гигантской
-    - Всегда возвращается адекватная скидка
+    Защита от гигантских цен: скидка ограничивается max_discount.
     """
 
     commission_rate = commission_percent / 100
@@ -67,42 +63,36 @@ def calculate_recommended_price(
     if denominator <= 0:
         return None
 
-    # 1️⃣ Считаем нужную цену для покупателя (со скидкой)
+    # Считаем нужную цену для покупателя (со скидкой)
     price_with_discount = (logistics + returns_cost + acceptance_fee + cost_price) / denominator
 
-    # 2️⃣ ОПРЕДЕЛЯЕМ ЦЕЛЕВУЮ СКИДКУ (главная логика!)
+    # Определяем целевую скидку
     if keep_discount:
-        # Оставляем текущую скидку как есть
         new_discount = current_discount
     else:
-        # Всегда стремимся к max_discount (это "разумная" скидка)
         if current_discount > max_discount:
             # Плавно снижаем: не больше чем на max_discount_change за раз
             new_discount = max(current_discount - max_discount_change, max_discount)
         elif current_discount < max_discount:
-            # Если текущая скидка меньше max — оставляем как есть
-            # (не будем повышать искусственно)
+            # Не повышаем искусственно
             new_discount = current_discount
         else:
-            # Точно равно max_discount
             new_discount = max_discount
     
-    # 3️⃣ ЗАЩИТА ОТ ГИГАНТСКОЙ ЦЕНЫ
-    # Ограничиваем скидку разумным пределом даже если пользователь установил больше
+    # Защита от гигантской цены
     if not keep_discount:
         new_discount = min(new_discount, max_discount)
 
-    # 4️⃣ Считаем цену до скидки
+    # Считаем цену до скидки
     if new_discount > 0 and new_discount < 100:
         price_without_discount = price_with_discount / (1 - new_discount / 100)
     else:
         price_without_discount = price_with_discount
 
-    # 5️⃣ Округляем до красивых цифр (кратно 10)
+    # Округляем до красивых цифр
     price_without_discount = round(price_without_discount / 10) * 10
     price_with_discount = price_without_discount * (1 - new_discount / 100)
 
-    # 6️⃣ Пересчитываем итоговые показатели
     result = calculate_current_profit(
         price_with_discount, commission_percent, logistics, cost_price, 
         buyout_rate, tax_rate, acceptance_fee
