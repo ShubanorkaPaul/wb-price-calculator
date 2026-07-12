@@ -3,6 +3,8 @@ import pandas as pd
 import io
 import json
 import gc
+import plotly.express as px
+import plotly.graph_objects as go
 from datetime import datetime
 from calculator import (
     calculate_current_profit,
@@ -30,11 +32,221 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+
+# ============ КАСТОМНЫЙ ДИЗАЙН ============
+
 st.markdown("""
 <style>
-    .stMetric { background-color: #f0f2f6; padding: 15px; border-radius: 10px; }
-    .loss-box { background-color: #ffeaea; padding: 15px; border-radius: 10px; border-left: 5px solid #ff4b4b; margin-bottom: 10px; }
-    .cat-box { background-color: #eaf4ff; padding: 15px; border-radius: 10px; border-left: 5px solid #4b8bff; margin-bottom: 10px; }
+    /* Основные цвета и шрифты */
+    html, body, [class*="css"] {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    
+    /* Главный заголовок */
+    h1 {
+        color: #1E40AF !important;
+        font-weight: 700 !important;
+        border-bottom: 3px solid #3B82F6;
+        padding-bottom: 10px;
+        margin-bottom: 20px !important;
+    }
+    
+    h2 {
+        color: #1F2937 !important;
+        font-weight: 600 !important;
+        margin-top: 20px !important;
+    }
+    
+    h3 {
+        color: #374151 !important;
+        font-weight: 600 !important;
+    }
+    
+    /* Карточки метрик */
+    [data-testid="stMetric"] {
+        background: linear-gradient(135deg, #FFFFFF 0%, #F9FAFB 100%);
+        padding: 20px;
+        border-radius: 12px;
+        border-left: 4px solid #3B82F6;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        transition: transform 0.2s;
+    }
+    
+    [data-testid="stMetric"]:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+    
+    [data-testid="stMetricLabel"] {
+        color: #6B7280 !important;
+        font-size: 13px !important;
+        font-weight: 500 !important;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    [data-testid="stMetricValue"] {
+        color: #111827 !important;
+        font-size: 28px !important;
+        font-weight: 700 !important;
+    }
+    
+    /* Кнопки */
+    .stButton > button {
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        transition: all 0.2s !important;
+        border: none !important;
+    }
+    
+    .stButton > button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+    
+    /* Primary кнопки */
+    [data-testid="baseButton-primary"] {
+        background: linear-gradient(135deg, #3B82F6 0%, #2563EB 100%) !important;
+        color: white !important;
+    }
+    
+    /* Alerts */
+    [data-testid="stAlert"] {
+        border-radius: 10px !important;
+        border-left-width: 5px !important;
+        padding: 15px 20px !important;
+    }
+    
+    /* Success alert */
+    [data-testid="stAlert"][kind="success"] {
+        background-color: #D1FAE5 !important;
+        border-left-color: #10B981 !important;
+    }
+    
+    /* Warning alert */
+    [data-testid="stAlert"][kind="warning"] {
+        background-color: #FEF3C7 !important;
+        border-left-color: #F59E0B !important;
+    }
+    
+    /* Error alert */
+    [data-testid="stAlert"][kind="error"] {
+        background-color: #FEE2E2 !important;
+        border-left-color: #EF4444 !important;
+    }
+    
+    /* Info alert */
+    [data-testid="stAlert"][kind="info"] {
+        background-color: #DBEAFE !important;
+        border-left-color: #3B82F6 !important;
+    }
+    
+    /* Таблицы */
+    [data-testid="stDataFrame"] {
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    
+    /* Боковая панель */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #F9FAFB 0%, #F3F4F6 100%);
+    }
+    
+    [data-testid="stSidebar"] h1 {
+        color: #1E40AF !important;
+        font-size: 22px !important;
+        border-bottom: 2px solid #3B82F6;
+    }
+    
+    [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
+        color: #374151 !important;
+        font-size: 16px !important;
+    }
+    
+    /* Разделители */
+    hr {
+        border: none;
+        height: 1px;
+        background: linear-gradient(to right, transparent, #E5E7EB, transparent);
+        margin: 20px 0;
+    }
+    
+    /* Загрузка файлов */
+    [data-testid="stFileUploader"] {
+        border: 2px dashed #D1D5DB;
+        border-radius: 10px;
+        padding: 15px;
+        background-color: #F9FAFB;
+    }
+    
+    /* Expander */
+    [data-testid="stExpander"] {
+        border-radius: 10px !important;
+        border: 1px solid #E5E7EB !important;
+        background-color: white !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    
+    /* Кастомные боксы */
+    .loss-box {
+        background: linear-gradient(135deg, #FEE2E2 0%, #FECACA 100%);
+        padding: 20px;
+        border-radius: 12px;
+        border-left: 5px solid #DC2626;
+        margin-bottom: 15px;
+        box-shadow: 0 2px 4px rgba(220,38,38,0.1);
+    }
+    
+    .loss-box h4 {
+        color: #991B1B !important;
+        margin-top: 0 !important;
+    }
+    
+    .success-box {
+        background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 100%);
+        padding: 20px;
+        border-radius: 12px;
+        border-left: 5px solid #059669;
+        margin-bottom: 15px;
+    }
+    
+    .info-box {
+        background: linear-gradient(135deg, #DBEAFE 0%, #BFDBFE 100%);
+        padding: 20px;
+        border-radius: 12px;
+        border-left: 5px solid #2563EB;
+        margin-bottom: 15px;
+    }
+    
+    /* Кастомный header */
+    .main-header {
+        background: linear-gradient(135deg, #3B82F6 0%, #1E40AF 100%);
+        padding: 25px 30px;
+        border-radius: 12px;
+        color: white;
+        margin-bottom: 25px;
+        box-shadow: 0 4px 6px rgba(59,130,246,0.2);
+    }
+    
+    .main-header h1 {
+        color: white !important;
+        margin: 0 !important;
+        border: none !important;
+        padding: 0 !important;
+        font-size: 32px !important;
+    }
+    
+    .main-header p {
+        color: #DBEAFE !important;
+        margin: 5px 0 0 0 !important;
+        font-size: 14px !important;
+    }
+    
+    /* Плавная анимация */
+    * {
+        transition: background-color 0.15s ease;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -104,8 +316,6 @@ with st.sidebar:
                     st.success(f"✅ Загружено {len(new_costs)} товаров")
                     if new_models:
                         st.info(f"📋 Модели указаны для {len(new_models)} товаров")
-                    else:
-                        st.caption("💡 Можешь добавить колонку 'Модель' в Excel для точности")
             else: 
                 st.error("❌ Не найдены колонки Артикул и Себестоимость")
         except Exception as e: 
@@ -139,8 +349,7 @@ with st.sidebar:
     
     acceptance_fee = st.number_input(
         "Платная приёмка (₽ на ед.)", 
-        min_value=0, max_value=500, value=0, step=5,
-        help="Средняя стоимость платной приёмки на склад WB"
+        min_value=0, max_value=500, value=0, step=5
     )
 
     st.markdown("---")
@@ -158,7 +367,6 @@ with st.sidebar:
     else:
         custom_tax = st.number_input("Свой % налога", 0.0, 50.0, 6.0, 0.5)
         tax_rate = custom_tax / 100
-    tax_display = f"{tax_rate*100:.1f}%"
 
     st.markdown("---")
 
@@ -188,7 +396,13 @@ with st.sidebar:
 
 # ============ ГЛАВНАЯ ============
 
-st.title("🧮 Умный калькулятор цен WB")
+# Красивый header
+st.markdown("""
+<div class="main-header">
+    <h1>🧮 Умный калькулятор цен WB</h1>
+    <p>Автоматический расчёт оптимальных цен с учётом всех расходов</p>
+</div>
+""", unsafe_allow_html=True)
 
 if not api_key:
     st.warning("👈 Введи API ключ в боковой панели")
@@ -204,7 +418,7 @@ if not st.session_state.get("cost_prices", {}):
         "Модель": ["FBS", "FBS", "DBS", "FBO"]
     })
     st.dataframe(example_df, use_container_width=False)
-    st.caption("💡 Колонка 'Модель' опциональна — можно указать FBS/FBO/DBS для точного расчёта")
+    st.caption("💡 Колонка 'Модель' опциональна")
     st.stop()
 
 if st.session_state.get("update_result"):
@@ -256,15 +470,12 @@ if st.session_state["df_results"] is None:
 
     merged["available_models"] = merged["article"].apply(lambda x: get_available_models(x, stocks_df))
 
-    # ==== УМНОЕ ОПРЕДЕЛЕНИЕ МОДЕЛИ ====
     saved_models = st.session_state.get("cost_models", {})
     
     def determine_final_model(row):
         article = str(row["article"]).strip()
-        
         if article in saved_models:
             return saved_models[article], "excel"
-        
         available = row.get("available_models", set())
         if available and len(available) > 0:
             if force_model and force_model in available:
@@ -273,7 +484,6 @@ if st.session_state["df_results"] is None:
                 for m in ["FBS", "FBO", "DBS"]:
                     if m in available:
                         return m, "wb_stocks"
-        
         if force_model:
             return force_model, "default"
         else:
@@ -291,7 +501,6 @@ if st.session_state["df_results"] is None:
                 return force_model in row.get("available_models", set())
             else:
                 return True
-        
         merged["model_available"] = merged.apply(is_available, axis=1)
     else:
         merged["model_available"] = True
@@ -347,6 +556,12 @@ if st.session_state["df_results"] is None:
             "current_price": row["price"], "current_discount": row["discount"] or 0,
             "current_price_final": row["discounted_price"] or row["price"],
             "current_profit": current["profit"], "current_margin": current["margin"],
+            # Компоненты расходов для графиков
+            "commission_rub": current["commission"],
+            "logistics_rub": current["logistics"],
+            "acquiring_rub": current["acquiring"],
+            "returns_rub": current["returns_cost"],
+            "tax_rub": current["tax"],
             "recommended_price": recommended["price_without_discount"],
             "recommended_discount": recommended["discount_percent"],
             "recommended_final": recommended["price_with_discount"],
@@ -358,14 +573,13 @@ if st.session_state["df_results"] is None:
         })
 
     if not results:
-        st.warning("⚠️ Нет товаров для расчёта. Проверь себестоимость и цены.")
+        st.warning("⚠️ Нет товаров для расчёта.")
         st.session_state["calc_loaded"] = False
         st.stop()
 
     st.session_state["df_results"] = pd.DataFrame(results)
     st.session_state["skipped_no_stock"] = skipped_no_stock
     
-    # Освобождаем память после расчёта
     del cards_df, prices_df, commissions_df, stocks_df, merged, results
     gc.collect()
 
@@ -385,53 +599,218 @@ ok = df_results[df_results["category"] == "в норме"]
 potential = df_results["profit_diff"].sum()
 
 col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-with col_m1: st.metric("📦 Всего", total_products)
+with col_m1: st.metric("📦 Всего товаров", total_products)
 with col_m2: st.metric("🔴 Убыточные", len(losing_df))
 with col_m3: st.metric("🟡 Ниже цели", len(below_target))
 with col_m4: st.metric("🟢 В норме", len(ok))
 
-# Источники определения модели
-if force_model and "model_source" in df_results.columns:
-    excel_source = len(df_results[df_results["model_source"] == "excel"])
-    wb_source = len(df_results[df_results["model_source"] == "wb_stocks"])
-    default_source = len(df_results[df_results["model_source"] == "default"])
-    
-    if excel_source > 0 or wb_source > 0 or default_source > 0:
-        with st.expander("🔍 Как определилась модель для товаров"):
-            col_s1, col_s2, col_s3 = st.columns(3)
-            with col_s1:
-                st.metric("📋 Из Excel", excel_source, help="Модель указана в файле себестоимости")
-            with col_s2:
-                st.metric("📦 Из WB API", wb_source, help="Модель определена по остаткам")
-            with col_s3:
-                st.metric("⚙️ По умолчанию", default_source, help="Использована модель из настроек")
-            
-            if default_source > 0:
-                st.warning(f"""
-                ⚠️ Для **{default_source} товаров** модель определена по настройке.
-                
-                Для точности — добавь в Excel колонку **"Модель"** с указанием FBS/FBO/DBS.
-                """)
 
-# Убыточные товары
+# ============ ГРАФИКИ PLOTLY ============
+
+st.markdown("---")
+st.subheader("📈 Визуальный анализ")
+
+col_g1, col_g2 = st.columns(2)
+
+# График 1: Donut chart статусов
+with col_g1:
+    st.markdown("##### 🎯 Распределение товаров по статусам")
+    
+    status_data = pd.DataFrame({
+        "Статус": ["🔴 Убыточные", "🟡 Ниже цели", "🟢 В норме"],
+        "Количество": [len(losing_df), len(below_target), len(ok)]
+    })
+    
+    fig_donut = go.Figure(data=[go.Pie(
+        labels=status_data["Статус"],
+        values=status_data["Количество"],
+        hole=0.55,
+        marker=dict(colors=['#EF4444', '#F59E0B', '#10B981']),
+        textinfo='label+percent',
+        textfont=dict(size=13),
+        hovertemplate='<b>%{label}</b><br>Товаров: %{value}<br>Доля: %{percent}<extra></extra>'
+    )])
+    
+    fig_donut.update_layout(
+        showlegend=False,
+        height=350,
+        margin=dict(t=20, b=20, l=20, r=20),
+        annotations=[dict(
+            text=f'<b>{total_products}</b><br>товаров',
+            x=0.5, y=0.5,
+            font=dict(size=20, color='#1F2937'),
+            showarrow=False
+        )]
+    )
+    
+    st.plotly_chart(fig_donut, use_container_width=True)
+
+
+# График 2: Гистограмма распределения маржи
+with col_g2:
+    st.markdown("##### 📊 Распределение маржи по товарам")
+    
+    margin_data = df_results["current_margin"].clip(-30, 60)
+    
+    fig_hist = px.histogram(
+        x=margin_data,
+        nbins=20,
+        color_discrete_sequence=['#3B82F6']
+    )
+    
+    # Добавляем вертикальные линии
+    fig_hist.add_vline(x=0, line_dash="dash", line_color="red", 
+                       annotation_text="Убыток", annotation_position="top")
+    fig_hist.add_vline(x=target_margin, line_dash="dash", line_color="green", 
+                       annotation_text=f"Цель {target_margin}%", annotation_position="top")
+    
+    fig_hist.update_layout(
+        xaxis_title="Маржа, %",
+        yaxis_title="Количество товаров",
+        height=350,
+        margin=dict(t=20, b=40, l=40, r=20),
+        showlegend=False,
+        plot_bgcolor='white',
+        paper_bgcolor='white'
+    )
+    
+    fig_hist.update_xaxes(gridcolor='#F3F4F6', zerolinecolor='#E5E7EB')
+    fig_hist.update_yaxes(gridcolor='#F3F4F6')
+    
+    st.plotly_chart(fig_hist, use_container_width=True)
+
+
+# График 3: ТОП-10 прибыльных
+col_g3, col_g4 = st.columns(2)
+
+with col_g3:
+    st.markdown("##### 🏆 ТОП-10 прибыльных товаров")
+    
+    top_profitable = df_results.nlargest(10, "current_profit")[["article", "current_profit"]].copy()
+    top_profitable["article_short"] = top_profitable["article"].str[:20]
+    
+    fig_top = go.Figure(go.Bar(
+        x=top_profitable["current_profit"],
+        y=top_profitable["article_short"],
+        orientation='h',
+        marker=dict(
+            color=top_profitable["current_profit"],
+            colorscale='Greens',
+            showscale=False
+        ),
+        text=top_profitable["current_profit"].apply(lambda x: f"{x:.0f} ₽"),
+        textposition='outside'
+    ))
+    
+    fig_top.update_layout(
+        xaxis_title="Прибыль с продажи, ₽",
+        yaxis_title="",
+        height=350,
+        margin=dict(t=20, b=40, l=100, r=60),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        yaxis=dict(autorange="reversed")
+    )
+    
+    fig_top.update_xaxes(gridcolor='#F3F4F6')
+    
+    st.plotly_chart(fig_top, use_container_width=True)
+
+
+# График 4: ТОП убыточных
+with col_g4:
+    st.markdown("##### 🚨 ТОП-10 самых убыточных")
+    
+    if len(losing_df) > 0:
+        top_losing = losing_df.nsmallest(10, "current_profit")[["article", "current_profit"]].copy()
+        top_losing["article_short"] = top_losing["article"].str[:20]
+        top_losing["loss"] = top_losing["current_profit"].abs()
+        
+        fig_loss = go.Figure(go.Bar(
+            x=top_losing["loss"],
+            y=top_losing["article_short"],
+            orientation='h',
+            marker=dict(
+                color=top_losing["loss"],
+                colorscale='Reds',
+                showscale=False
+            ),
+            text=top_losing["current_profit"].apply(lambda x: f"{x:.0f} ₽"),
+            textposition='outside'
+        ))
+        
+        fig_loss.update_layout(
+            xaxis_title="Убыток с продажи, ₽",
+            yaxis_title="",
+            height=350,
+            margin=dict(t=20, b=40, l=100, r=60),
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            yaxis=dict(autorange="reversed")
+        )
+        
+        fig_loss.update_xaxes(gridcolor='#F3F4F6')
+        
+        st.plotly_chart(fig_loss, use_container_width=True)
+    else:
+        st.success("🎉 Нет убыточных товаров!")
+
+
+# График 5: Круговая диаграмма расходов
+st.markdown("##### 🥧 Куда уходят деньги (в среднем на один товар)")
+
+avg_commission = df_results["commission_rub"].mean()
+avg_logistics = df_results["logistics_rub"].mean()
+avg_acquiring = df_results["acquiring_rub"].mean()
+avg_returns = df_results["returns_rub"].mean()
+avg_tax = df_results["tax_rub"].mean()
+avg_cost = df_results["cost_price"].mean()
+
+expenses_data = pd.DataFrame({
+    "Категория": ["💰 Комиссия WB", "🚚 Логистика", "💳 Эквайринг", "↩️ Возвраты", "🏛️ Налог", "📦 Себестоимость"],
+    "Сумма": [avg_commission, avg_logistics, avg_acquiring, avg_returns, avg_tax, avg_cost]
+})
+
+fig_expenses = px.pie(
+    expenses_data,
+    values="Сумма",
+    names="Категория",
+    color_discrete_sequence=['#3B82F6', '#8B5CF6', '#EC4899', '#F59E0B', '#EF4444', '#10B981']
+)
+
+fig_expenses.update_traces(
+    textinfo='label+percent',
+    textfont=dict(size=13),
+    hovertemplate='<b>%{label}</b><br>Средняя сумма: %{value:.0f} ₽<br>Доля: %{percent}<extra></extra>'
+)
+
+fig_expenses.update_layout(
+    height=400,
+    margin=dict(t=20, b=20, l=20, r=20),
+    showlegend=True,
+    legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.05)
+)
+
+st.plotly_chart(fig_expenses, use_container_width=True)
+
+
+# ============ УБЫТОЧНЫЕ ТОВАРЫ ============
+
 if len(losing_df) > 0:
     total_loss_per_unit = abs(losing_df["current_profit"].sum())
     
     st.markdown(f"""
     <div class="loss-box">
         <h4>🚨 Внимание! У тебя {len(losing_df)} убыточных товаров!</h4>
-        <b>Суммарный убыток с продажи 1 шт каждого: <span style='color:red;'>− {total_loss_per_unit:,.0f} ₽</span></b><br>
-        <i>(Если продать по 100 шт каждого = потеряешь {-total_loss_per_unit * 100:,.0f} ₽!)</i>
+        <b>Суммарный убыток с продажи 1 шт каждого: <span style='color:#DC2626; font-size:20px;'>− {total_loss_per_unit:,.0f} ₽</span></b><br>
+        <i>Если продать по 100 шт каждого = потеряешь {-total_loss_per_unit * 100:,.0f} ₽!</i>
     </div>
     """, unsafe_allow_html=True)
-    
-    st.markdown("**Топ-3 самых убыточных товара:**")
-    worst = losing_df.sort_values("current_profit").head(3)
-    for _, row in worst.iterrows():
-        st.write(f"🩸 `{row['article']}` — убыток **{row['current_profit']:.0f} ₽** с каждой продажи (Маржа: {row['current_margin']:.1f}%)")
 
-# Анализ по категориям
-with st.expander("📁 Анализ по категориям (какие ниши тянут вниз)"):
+
+# ============ АНАЛИЗ ПО КАТЕГОРИЯМ ============
+
+with st.expander("📁 Анализ по категориям товаров"):
     cat_analysis = df_results.groupby("subject").agg(
         Товаров=("article", "count"),
         Средняя_маржа=("current_margin", "mean"),
@@ -442,12 +821,23 @@ with st.expander("📁 Анализ по категориям (какие ниш
     cat_analysis["Средняя_маржа"] = cat_analysis["Средняя_маржа"].round(1)
     
     def color_cat_margin(val):
-        color = '#ffcccc' if val < 0 else '#fff4cc' if val < target_margin else '#ccffcc'
+        color = '#FEE2E2' if val < 0 else '#FEF3C7' if val < target_margin else '#D1FAE5'
         return f'background-color: {color}; color: black'
 
     st.dataframe(cat_analysis.style.map(color_cat_margin, subset=['Средняя_маржа']), use_container_width=True)
 
-st.success(f"💰 **Потенциал роста прибыли:** `+{potential:,.0f} ₽` (если применить все рекомендованные цены)")
+# Потенциал
+st.markdown(f"""
+<div class="success-box">
+    <h4 style='margin-top:0;'>💰 Потенциал роста прибыли</h4>
+    <div style='font-size: 28px; font-weight: 700; color: #059669;'>
+        +{potential:,.0f} ₽
+    </div>
+    <div style='color: #6B7280; margin-top: 5px;'>
+        если применить все рекомендованные цены
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 
 # ============ ФИЛЬТРЫ И ПАГИНАЦИЯ ============
@@ -482,7 +872,7 @@ to_update_from_filter = filtered[
 st.info(f"📊 Показано: **{len(filtered)}** товаров | Требуют обновления: **{len(to_update_from_filter)}**")
 
 
-# ============ ТАБЛИЦА С ЦВЕТОМ ============
+# ============ ТАБЛИЦА ============
 
 if len(filtered) > 0:
     display_df = filtered[[
@@ -530,9 +920,9 @@ if len(filtered) > 0:
     def highlight_margins(val):
         try:
             v = float(val)
-            if v < 0: return 'background-color: #ffcccc; color: black'
-            elif v < target_margin - 2: return 'background-color: #fff4cc; color: black'
-            else: return 'background-color: #ccffcc; color: black'
+            if v < 0: return 'background-color: #FEE2E2; color: #991B1B; font-weight: 600'
+            elif v < target_margin - 2: return 'background-color: #FEF3C7; color: #92400E; font-weight: 600'
+            else: return 'background-color: #D1FAE5; color: #065F46; font-weight: 600'
         except: return ''
 
     styled_df = display_df_page.style.map(
@@ -550,7 +940,6 @@ else:
 
 st.markdown("---")
 st.subheader("📤 Экспорт данных")
-st.caption("Скачай отчёт в удобном формате")
 
 col_exp1, col_exp2, col_exp3 = st.columns(3)
 
@@ -561,7 +950,6 @@ with col_exp1:
         losing_df.to_excel(writer, sheet_name="Убыточные", index=False)
         below_target.to_excel(writer, sheet_name="Ниже цели", index=False)
         ok.to_excel(writer, sheet_name="В норме", index=False)
-        
         prices_to_update = df_results[["nm_id", "recommended_price", "recommended_discount"]].copy()
         prices_to_update.columns = ["nmID", "price", "discount"]
         prices_to_update.to_excel(writer, sheet_name="Цены для загрузки", index=False)
@@ -571,8 +959,7 @@ with col_exp1:
         data=output_excel.getvalue(),
         file_name=f"wb_prices_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-        help="Excel файл с 5 листами"
+        use_container_width=True
     )
 
 with col_exp2:
@@ -582,8 +969,7 @@ with col_exp2:
         data=csv_data,
         file_name=f"wb_prices_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
         mime="text/csv",
-        use_container_width=True,
-        help="CSV для импорта в Google Sheets, 1С"
+        use_container_width=True
     )
 
 with col_exp3:
@@ -613,22 +999,8 @@ with col_exp3:
         data=json_data,
         file_name=f"wb_prices_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
         mime="application/json",
-        use_container_width=True,
-        help="JSON для API интеграций"
+        use_container_width=True
     )
-
-
-with st.expander("💡 Какой формат для чего использовать?"):
-    st.markdown("""
-    - **📊 Excel** — полный анализ, 5 листов (все товары, убыточные, ниже цели, в норме, цены для загрузки)
-    - **📄 CSV** — импорт в Google Sheets, 1С, МойСклад
-    - **🔧 JSON** — программные интеграции, API
-    
-    **Google Sheets:** скачай CSV или Excel → Файл → Импорт (30 секунд)
-    
-    ℹ️ **PDF временно отключён** для экономии памяти сервера.
-    Вернём при апгрейде на платный план Render.
-    """)
 
 
 # ============ ОБНОВЛЕНИЕ ЦЕН ============
