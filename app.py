@@ -35,10 +35,46 @@ st.set_page_config(
 )
 
 
-# ============ КАСТОМНЫЙ ДИЗАЙН (СВЕТЛАЯ ТЕМА ПРИНУДИТЕЛЬНО) ============
+# ============ КАСТОМНЫЙ ДИЗАЙН (СВЕТЛАЯ ТЕМА + СКРЫТИЕ МЕНЮ STREAMLIT) ============
 
 st.markdown("""
 <style>
+    /* ========== СКРЫВАЕМ МЕНЮ STREAMLIT ========== */
+    
+    /* Скрываем меню с 3 точками (справа сверху) */
+    [data-testid="stMainMenu"] {
+        display: none !important;
+        visibility: hidden !important;
+    }
+    
+    /* Скрываем "Made with Streamlit" внизу */
+    footer {
+        display: none !important;
+        visibility: hidden !important;
+    }
+    
+    /* Скрываем шапку Streamlit сверху */
+    header[data-testid="stHeader"] {
+        display: none !important;
+        visibility: hidden !important;
+    }
+    
+    /* Скрываем панель инструментов */
+    [data-testid="stToolbar"] {
+        display: none !important;
+        visibility: hidden !important;
+    }
+    
+    /* Скрываем кнопку Deploy */
+    [data-testid="stDeployButton"] {
+        display: none !important;
+    }
+    
+    /* Убираем лишний отступ сверху */
+    .block-container {
+        padding-top: 2rem !important;
+    }
+    
     /* ========== ПРИНУДИТЕЛЬНО СВЕТЛАЯ ТЕМА ========== */
     
     @media (prefers-color-scheme: dark) {
@@ -449,6 +485,7 @@ st.markdown("""
         .block-container {
             padding-left: 1rem !important;
             padding-right: 1rem !important;
+            padding-top: 1rem !important;
         }
         
         [data-testid="stTabs"] [data-baseweb="tab"] {
