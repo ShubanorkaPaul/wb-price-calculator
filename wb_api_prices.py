@@ -1,12 +1,13 @@
 """
 Работа с WB API для калькулятора цен - ОПТИМИЗИРОВАННАЯ ВЕРСИЯ
-С параллельной загрузкой для максимальной скорости
+С параллельной загрузкой и парсером акций
 """
 
 import requests
 import pandas as pd
 import streamlit as st
 import time
+import re
 from concurrent.futures import ThreadPoolExecutor
 
 
@@ -21,8 +22,8 @@ def get_headers(api_key):
     return {"Authorization": api_key}
 
 
-def make_request(method, url, api_key, params=None, json_data=None, max_retries=3):
-    """Быстрый запрос с минимальными задержками"""
+def make_request(method, url, api_key, params=None, json_data=None, max_retries=5):
+    """Универсальный запрос с повторными попытками"""
 
     for attempt in range(max_retries):
         try:
@@ -151,13 +152,13 @@ def get_prices(api_key):
 
     while True:
         params = {"limit": limit, "offset": offset}
-        response, error = make_request("GET", url, api_key, params=params, max_retries=3)
+        response, error = make_request("GET", url, api_key, params=params, max_retries=5)
 
         if error:
             if error == "401":
                 st.error("❌ Нет прав 'Цены и скидки' у API ключа")
             elif error == "429":
-                st.warning("⚠️ WB временно ограничил запросы к ценам.")
+                st.warning("⚠️ WB временно ограничил запросы. Подожди 5-10 минут.")
             else:
                 st.error(f"❌ Ошибка получения цен: {error}")
             return pd.DataFrame()
@@ -203,7 +204,7 @@ def get_prices(api_key):
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_commissions(api_key):
-    """Получить комиссии по категориям (кеш на 24 часа)"""
+    """Получить комиссии по категориям"""
 
     url = f"{BASE_COMMON}/api/v1/tariffs/commission"
     params = {"locale": "ru"}
@@ -236,7 +237,7 @@ def get_commissions(api_key):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_stocks_by_warehouse(api_key):
-    """Получить остатки (медленно из-за лимитов WB)"""
+    """Получить остатки по складам"""
     from datetime import datetime, timedelta
 
     date_from = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
@@ -338,13 +339,10 @@ def update_prices(api_key, price_updates):
     return results
 
 
-# ========== ПАРАЛЛЕЛЬНАЯ ЗАГРУЗКА ==========
+# ============ ПАРАЛЛЕЛЬНАЯ ЗАГРУЗКА ============
 
 def load_all_data_parallel(api_key, load_stocks=False):
-    """
-    Загружает все данные ПАРАЛЛЕЛЬНО - в 3 раза быстрее!
-    load_stocks=False по умолчанию — не грузим медленные остатки
-    """
+    """Загружает все данные параллельно"""
     results = {
         "cards": pd.DataFrame(),
         "prices": pd.DataFrame(),
@@ -355,28 +353,176 @@ def load_all_data_parallel(api_key, load_stocks=False):
     def load_cards():
         results["cards"] = get_all_cards(api_key)
     
-    def load_prices():
+    def load_prices_fn():
         results["prices"] = get_prices(api_key)
     
-    def load_commissions():
+    def load_commissions_fn():
         results["commissions"] = get_commissions(api_key)
     
     def load_stocks_fn():
         results["stocks"] = get_stocks_by_warehouse(api_key)
     
-    # Параллельно грузим карточки, цены, комиссии
     with ThreadPoolExecutor(max_workers=3) as executor:
         futures = [
             executor.submit(load_cards),
-            executor.submit(load_prices),
-            executor.submit(load_commissions),
+            executor.submit(load_prices_fn),
+            executor.submit(load_commissions_fn),
         ]
         
         for future in futures:
             future.result()
     
-    # Остатки грузим ПОСЛЕ (если нужно)
     if load_stocks:
         load_stocks_fn()
     
     return results
+
+
+# ============ ПАРСЕР ФАЙЛА АКЦИЙ WB ============
+
+def parse_action_file(uploaded_file):
+    """
+    Парсит Excel файл акции от WB.
+    Возвращает: (DataFrame, error_message)
+    """
+    try:
+        # Определяем название акции из имени файла
+        action_name = "Акция WB"
+        try:
+            file_name = uploaded_file.name
+            # Убираем расширение
+            name_without_ext = file_name.rsplit('.', 1)[0]
+            # Ищем текст на русском
+            match = re.search(r'[а-яА-ЯёЁ][а-яА-ЯёЁ\s\-_]+', name_without_ext)
+            if match:
+                action_name = match.group(0).strip().replace('_', ' ').replace('-', ' ')
+        except:
+            pass
+        
+        # Читаем файл
+        if uploaded_file.name.endswith('.csv'):
+            df = pd.read_csv(uploaded_file)
+        else:
+            df = pd.read_excel(uploaded_file)
+        
+        # Маппинг колонок (WB может менять названия)
+        column_mappings = {
+            'article': ['артикул поставщика', 'артикул продавца', 'артикул', 'vendor', 'sku'],
+            'nm_id': ['артикул wb', 'nm_id', 'nmid'],
+            'action_price': ['плановая цена для акции', 'плановая цена', 'цена в акции', 'action price'],
+            'action_discount': ['загружаемая скидка для участия в акции', 'загружаемая скидка', 'скидка для акции'],
+            'current_price': ['текущая розничная цена', 'текущая цена', 'розничная цена'],
+            'current_discount': ['текущая скидка на сайте', 'текущая скидка'],
+            'min_price': ['минимальная цена для применения скидки', 'минимальная цена', 'мин цена'],
+            'status': ['статус'],
+            'turnover': ['оборачиваемость'],
+            'stock_wb': ['остаток товара на складах wb', 'остаток wb'],
+            'stock_seller': ['остаток товара на складе продавца', 'остаток продавца'],
+            'name': ['наименование', 'название'],
+            'brand': ['бренд'],
+            'subject': ['предмет'],
+            'days_on_site': ['количество дней на сайте', 'дней на сайте'],
+            'in_action': ['товар уже участвует в акции', 'участвует в акции'],
+        }
+        
+        # Находим реальные названия колонок
+        col_map = {}
+        for target_col, possible_names in column_mappings.items():
+            for actual_col in df.columns:
+                actual_lower = str(actual_col).lower().strip()
+                for possible in possible_names:
+                    if possible in actual_lower:
+                        col_map[target_col] = actual_col
+                        break
+                if target_col in col_map:
+                    break
+        
+        # Проверяем обязательные колонки
+        if 'article' not in col_map:
+            return None, "Не найдена колонка 'Артикул поставщика' в файле"
+        
+        # Формируем результат
+        result = pd.DataFrame()
+        result['article'] = df[col_map['article']].astype(str).str.strip()
+        
+        if 'action_price' in col_map:
+            result['action_price'] = pd.to_numeric(df[col_map['action_price']], errors='coerce').fillna(0)
+        else:
+            result['action_price'] = 0
+        
+        if 'action_discount' in col_map:
+            result['action_discount'] = pd.to_numeric(df[col_map['action_discount']], errors='coerce').fillna(0)
+        else:
+            result['action_discount'] = 0
+        
+        if 'current_price' in col_map:
+            result['current_price'] = pd.to_numeric(df[col_map['current_price']], errors='coerce').fillna(0)
+        else:
+            result['current_price'] = 0
+        
+        if 'min_price' in col_map:
+            result['min_price'] = pd.to_numeric(df[col_map['min_price']], errors='coerce').fillna(0)
+        else:
+            result['min_price'] = 0
+        
+        if 'status' in col_map:
+            result['status'] = df[col_map['status']].astype(str).fillna('')
+        else:
+            result['status'] = ''
+        
+        if 'turnover' in col_map:
+            result['turnover'] = pd.to_numeric(df[col_map['turnover']], errors='coerce').fillna(0)
+        else:
+            result['turnover'] = 0
+        
+        if 'stock_wb' in col_map:
+            result['stock_wb'] = pd.to_numeric(df[col_map['stock_wb']], errors='coerce').fillna(0)
+        else:
+            result['stock_wb'] = 0
+        
+        if 'stock_seller' in col_map:
+            result['stock_seller'] = pd.to_numeric(df[col_map['stock_seller']], errors='coerce').fillna(0)
+        else:
+            result['stock_seller'] = 0
+        
+        if 'name' in col_map:
+            result['name'] = df[col_map['name']].astype(str).fillna('')
+        else:
+            result['name'] = ''
+        
+        if 'brand' in col_map:
+            result['brand'] = df[col_map['brand']].astype(str).fillna('')
+        else:
+            result['brand'] = ''
+        
+        if 'subject' in col_map:
+            result['subject'] = df[col_map['subject']].astype(str).fillna('')
+        else:
+            result['subject'] = ''
+        
+        if 'days_on_site' in col_map:
+            result['days_on_site'] = pd.to_numeric(df[col_map['days_on_site']], errors='coerce').fillna(0)
+        else:
+            result['days_on_site'] = 0
+        
+        if 'in_action' in col_map:
+            result['in_action'] = df[col_map['in_action']].astype(str).str.lower().str.contains('да|yes', na=False)
+        else:
+            result['in_action'] = False
+        
+        if 'nm_id' in col_map:
+            result['nm_id'] = pd.to_numeric(df[col_map['nm_id']], errors='coerce').fillna(0).astype(int)
+        else:
+            result['nm_id'] = 0
+        
+        # Убираем пустые артикулы
+        result = result[result['article'] != 'nan']
+        result = result[result['article'].str.len() > 0]
+        
+        # Название акции
+        result['action_name'] = action_name
+        
+        return result, None
+    
+    except Exception as e:
+        return None, f"Ошибка при чтении файла: {str(e)}"
