@@ -1,6 +1,6 @@
 """
 Модуль расчёта цен и юнит-экономики
-С полным учётом возвратов
+С учётом возвратов и точки безубыточности
 """
 
 ACQUIRING = 0.015  # Эквайринг 1.5%
@@ -17,28 +17,17 @@ def calculate_current_profit(
     return_processing_fee=30,
     damage_rate=0.10
 ):
-    """
-    Считает текущую прибыль по товару с полным учётом возвратов
-    
-    Возвраты включают:
-    - Логистику обратно
-    - Обработку возврата на складе WB
-    - Порчу товара при возврате
-    """
+    """Считает текущую прибыль по товару с полным учётом возвратов"""
 
     commission = price_with_discount * (commission_percent / 100)
     acquiring = price_with_discount * ACQUIRING
 
-    # Полный расчёт возвратов
     return_rate = 1 - buyout_rate
     return_logistics = logistics
     return_processing = return_processing_fee
     return_damage = cost_price * damage_rate
     
-    # Стоимость одного возврата
     cost_per_return = return_logistics + return_processing + return_damage
-    
-    # Средние расходы на возвраты (на единицу продажи)
     returns_cost = cost_per_return * return_rate
 
     for_pay = price_with_discount - commission - acquiring - logistics - returns_cost - acceptance_fee
@@ -65,6 +54,52 @@ def calculate_current_profit(
     }
 
 
+def calculate_break_even_price(
+    cost_price,
+    commission_percent,
+    logistics,
+    buyout_rate=0.90,
+    tax_rate=0.06,
+    acceptance_fee=0,
+    return_processing_fee=30,
+    damage_rate=0.10
+):
+    """
+    Рассчитывает ТОЧКУ БЕЗУБЫТОЧНОСТИ
+    
+    Это минимальная цена ДЛЯ ПОКУПАТЕЛЯ (со скидкой), 
+    при которой прибыль = 0.
+    
+    Формула:
+    profit = price - commission - acquiring - logistics - returns - acceptance - tax - cost = 0
+    
+    Решаем относительно price:
+    price * (1 - commission_rate - acquiring - tax_rate) = logistics + returns + acceptance + cost
+    price = (logistics + returns + acceptance + cost) / (1 - commission_rate - acquiring - tax_rate)
+    """
+    
+    commission_rate = commission_percent / 100
+    return_rate = 1 - buyout_rate
+    
+    # Полный расчёт возвратов
+    return_logistics = logistics
+    return_processing = return_processing_fee
+    return_damage = cost_price * damage_rate
+    cost_per_return = return_logistics + return_processing + return_damage
+    returns_cost = cost_per_return * return_rate
+    
+    # Знаменатель (маржа = 0, поэтому её нет в формуле)
+    denominator = 1 - commission_rate - ACQUIRING - tax_rate
+    
+    if denominator <= 0:
+        return None
+    
+    # Точка безубыточности (для покупателя)
+    break_even = (logistics + returns_cost + acceptance_fee + cost_price) / denominator
+    
+    return round(break_even, 2)
+
+
 def calculate_recommended_price(
     cost_price,
     commission_percent,
@@ -80,16 +115,12 @@ def calculate_recommended_price(
     return_processing_fee=30,
     damage_rate=0.10
 ):
-    """
-    Считает рекомендуемую цену исходя из целевой маржи.
-    Защита от гигантских цен: скидка ограничивается max_discount.
-    """
+    """Считает рекомендуемую цену исходя из целевой маржи"""
 
     commission_rate = commission_percent / 100
     margin_rate = target_margin / 100
     return_rate = 1 - buyout_rate
     
-    # Полный расчёт возвратов
     return_logistics = logistics
     return_processing = return_processing_fee
     return_damage = cost_price * damage_rate
@@ -101,33 +132,26 @@ def calculate_recommended_price(
     if denominator <= 0:
         return None
 
-    # Считаем нужную цену для покупателя (со скидкой)
     price_with_discount = (logistics + returns_cost + acceptance_fee + cost_price) / denominator
 
-    # Определяем целевую скидку
     if keep_discount:
         new_discount = current_discount
     else:
         if current_discount > max_discount:
-            # Плавно снижаем
             new_discount = max(current_discount - max_discount_change, max_discount)
         elif current_discount < max_discount:
-            # Не повышаем искусственно
             new_discount = current_discount
         else:
             new_discount = max_discount
     
-    # Защита от гигантской цены
     if not keep_discount:
         new_discount = min(new_discount, max_discount)
 
-    # Считаем цену до скидки
     if new_discount > 0 and new_discount < 100:
         price_without_discount = price_with_discount / (1 - new_discount / 100)
     else:
         price_without_discount = price_with_discount
 
-    # Округляем до красивых цифр (кратно 10)
     price_without_discount = round(price_without_discount / 10) * 10
     price_with_discount = price_without_discount * (1 - new_discount / 100)
 
