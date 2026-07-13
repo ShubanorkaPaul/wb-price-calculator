@@ -1,18 +1,45 @@
 """
 Модуль расчёта цен и юнит-экономики
+С полным учётом возвратов
 """
 
 ACQUIRING = 0.015  # Эквайринг 1.5%
 
 
-def calculate_current_profit(price_with_discount, commission_percent, logistics, cost_price, buyout_rate=0.90, tax_rate=0.06, acceptance_fee=0):
-    """Считает текущую прибыль по товару"""
+def calculate_current_profit(
+    price_with_discount, 
+    commission_percent, 
+    logistics, 
+    cost_price, 
+    buyout_rate=0.90, 
+    tax_rate=0.06, 
+    acceptance_fee=0,
+    return_processing_fee=30,
+    damage_rate=0.10
+):
+    """
+    Считает текущую прибыль по товару с полным учётом возвратов
+    
+    Возвраты включают:
+    - Логистику обратно
+    - Обработку возврата на складе WB
+    - Порчу товара при возврате
+    """
 
     commission = price_with_discount * (commission_percent / 100)
     acquiring = price_with_discount * ACQUIRING
 
+    # Полный расчёт возвратов
     return_rate = 1 - buyout_rate
-    returns_cost = logistics * return_rate
+    return_logistics = logistics
+    return_processing = return_processing_fee
+    return_damage = cost_price * damage_rate
+    
+    # Стоимость одного возврата
+    cost_per_return = return_logistics + return_processing + return_damage
+    
+    # Средние расходы на возвраты (на единицу продажи)
+    returns_cost = cost_per_return * return_rate
 
     for_pay = price_with_discount - commission - acquiring - logistics - returns_cost - acceptance_fee
     tax = price_with_discount * tax_rate
@@ -26,6 +53,9 @@ def calculate_current_profit(price_with_discount, commission_percent, logistics,
         "acquiring": round(acquiring, 2),
         "logistics": round(logistics, 2),
         "returns_cost": round(returns_cost, 2),
+        "return_logistics": round(return_logistics * return_rate, 2),
+        "return_processing": round(return_processing * return_rate, 2),
+        "return_damage": round(return_damage * return_rate, 2),
         "acceptance_fee": round(acceptance_fee, 2),
         "tax": round(tax, 2),
         "cost_price": round(cost_price, 2),
@@ -46,7 +76,9 @@ def calculate_recommended_price(
     keep_discount=False,
     buyout_rate=0.90,
     tax_rate=0.06,
-    acceptance_fee=0
+    acceptance_fee=0,
+    return_processing_fee=30,
+    damage_rate=0.10
 ):
     """
     Считает рекомендуемую цену исходя из целевой маржи.
@@ -56,7 +88,13 @@ def calculate_recommended_price(
     commission_rate = commission_percent / 100
     margin_rate = target_margin / 100
     return_rate = 1 - buyout_rate
-    returns_cost = logistics * return_rate
+    
+    # Полный расчёт возвратов
+    return_logistics = logistics
+    return_processing = return_processing_fee
+    return_damage = cost_price * damage_rate
+    cost_per_return = return_logistics + return_processing + return_damage
+    returns_cost = cost_per_return * return_rate
 
     denominator = 1 - commission_rate - ACQUIRING - tax_rate - margin_rate
 
@@ -71,7 +109,7 @@ def calculate_recommended_price(
         new_discount = current_discount
     else:
         if current_discount > max_discount:
-            # Плавно снижаем: не больше чем на max_discount_change за раз
+            # Плавно снижаем
             new_discount = max(current_discount - max_discount_change, max_discount)
         elif current_discount < max_discount:
             # Не повышаем искусственно
@@ -89,13 +127,14 @@ def calculate_recommended_price(
     else:
         price_without_discount = price_with_discount
 
-    # Округляем до красивых цифр
+    # Округляем до красивых цифр (кратно 10)
     price_without_discount = round(price_without_discount / 10) * 10
     price_with_discount = price_without_discount * (1 - new_discount / 100)
 
     result = calculate_current_profit(
         price_with_discount, commission_percent, logistics, cost_price, 
-        buyout_rate, tax_rate, acceptance_fee
+        buyout_rate, tax_rate, acceptance_fee,
+        return_processing_fee, damage_rate
     )
     result["price_without_discount"] = price_without_discount
     result["price_with_discount"] = price_with_discount
