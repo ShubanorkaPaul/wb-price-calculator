@@ -531,11 +531,19 @@ with st.sidebar:
                 if new_costs:
                     st.session_state["cost_prices"] = new_costs
                     st.session_state["cost_models"] = new_models
-                    st.success(f"✅ Загружено {len(new_costs)} товаров")
+                    
+                    # Toast-уведомления
+                    st.toast(f"✅ Загружено {len(new_costs)} товаров", icon="📦")
+                    
                     if new_models:
                         st.info(f"📋 Модели указаны для {len(new_models)} товаров")
+                        st.toast(f"📋 Модели загружены: {len(new_models)} шт", icon="ℹ️")
+                    
+                    st.success(f"✅ Загружено {len(new_costs)} товаров")
+                    
             else: 
                 st.error("❌ Не найдены колонки Артикул и Себестоимость")
+                st.toast("❌ Ошибка загрузки файла", icon="🚨")
         except Exception as e: 
             st.error(f"❌ Ошибка: {e}")
 
@@ -627,6 +635,9 @@ with st.sidebar:
         st.session_state["current_page"] = 1
         st.session_state["action_data"] = None
         gc.collect()
+        
+        # Toast-уведомление
+        st.toast("🗑️ Кеш и данные очищены", icon="🧹")
         st.rerun()
 
 
@@ -724,12 +735,28 @@ if not st.session_state.get("cost_prices", {}):
 
 if st.session_state.get("update_result"):
     result = st.session_state["update_result"]
-    st.success(f"✅ Отправлено на WB: **{result['success']}** товаров")
-    if result.get("errors"):
-        for err in result["errors"]: st.text(err)
-    if st.button("Скрыть уведомление"):
-        st.session_state["update_result"] = None
-        st.rerun()
+    
+    # Toast-уведомление об успехе
+    st.toast(f"✅ Отправлено на WB: {result['success']} товаров", icon="✅")
+    
+    # Подробности в расширяемом блоке
+    with st.expander("📊 Результат обновления цен", expanded=True):
+        st.success(f"✅ Успешно обновлено: **{result['success']}** товаров")
+        
+        if result.get("errors"):
+            st.error(f"❌ Ошибок: **{len(result['errors'])}**")
+            for err in result["errors"][:10]:  # Показываем первые 10 ошибок
+                st.caption(err)
+            if len(result["errors"]) > 10:
+                st.caption(f"...и ещё {len(result['errors']) - 10} ошибок")
+    
+    # Кнопка закрытия уведомления
+    col_close1, col_close2 = st.columns([1, 3])
+    with col_close1:
+        if st.button("✕ Закрыть уведомление", key="close_notification"):
+            st.session_state["update_result"] = None
+            st.rerun()
+    
     st.markdown("---")
 
 
@@ -743,6 +770,7 @@ if load_button:
     st.session_state["calc_loaded"] = True
     st.session_state["df_results"] = None
     st.session_state["current_page"] = 1
+    st.toast("🚀 Запуск загрузки данных...", icon="⏳")
 
 if not st.session_state["calc_loaded"]:
     st.stop()
@@ -767,12 +795,16 @@ if st.session_state["df_results"] is None:
     if cards_df.empty or prices_df.empty:
         progress.empty()
         st.error("❌ Не удалось загрузить данные")
+        st.toast("❌ Ошибка загрузки данных", icon="🚨")
         st.stop()
     
     elapsed = time.time() - start_time
     progress.progress(100, text=f"⚡ Загружено за {elapsed:.1f} секунд!")
     time.sleep(1)
     progress.empty()
+    
+    # Toast-уведомления о результатах загрузки
+    st.toast(f"✅ Данные загружены за {elapsed:.1f} сек", icon="✅")
     st.success(f"✅ Данные загружены за **{elapsed:.1f} сек** ({len(cards_df)} товаров)")
 
     merged = cards_df.merge(prices_df[["nm_id", "price", "discount", "discounted_price"]], on="nm_id", how="left")
@@ -954,7 +986,60 @@ with tab_analytics:
         - Защита от убытков
         """)
 
-    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+    # ===== НОВЫЙ БЛОК: ФИНАНСОВАЯ СВОДКА =====
+    st.markdown("---")
+    st.subheader("💰 Финансовая сводка (потенциальная)")
+    
+    # Расчёт финансовых метрик
+    total_revenue = df_results["current_price_final"].sum()
+    total_profit = df_results["current_profit"].sum()
+    total_cost = (df_results["cost_price"] * df_results["current_price_final"] / df_results["current_price"]).sum() if "current_price" in df_results.columns else 0
+    
+    # ROI (Return on Investment)
+    roi = ((total_profit / total_cost) * 100) if total_cost > 0 else 0
+    
+    # Средняя маржа
+    avg_margin = df_results["current_margin"].mean()
+    
+    # Потенциальная выручка при рекомендованных ценах
+    potential_revenue = df_results["recommended_final"].sum() if "recommended_final" in df_results.columns else 0
+    potential_profit = df_results["recommended_profit"].sum() if "recommended_profit" in df_results.columns else 0
+    
+    # Отображение метрик
+    col_fin1, col_fin2, col_fin3, col_fin4 = st.columns(4)
+    
+    with col_fin1:
+        st.metric(
+            "💰 Выручка (текущая)",
+            f"{total_revenue:,.0f} ₽",
+            help="Потенциальная выручка со всех товаров (по 1 шт)"
+        )
+    
+    with col_fin2:
+        st.metric(
+            "📈 Прибыль (текущая)",
+            f"{total_profit:,.0f} ₽",
+            delta=f"{avg_margin:.1f}% маржа",
+            help="Суммарная прибыль с продажи по 1 шт каждого товара"
+        )
+    
+    with col_fin3:
+        st.metric(
+            "🎯 ROI",
+            f"{roi:.1f}%",
+            help="Рентабельность инвестиций (прибыль / себестоимость)"
+        )
+    
+    with col_fin4:
+        profit_growth = potential_profit - total_profit if "recommended_profit" in df_results.columns else 0
+        st.metric(
+            "🚀 Потенциал роста",
+            f"{potential_profit:,.0f} ₽",
+            delta=f"+{profit_growth:,.0f} ₽" if profit_growth > 0 else f"{profit_growth:,.0f} ₽",
+            help="Прибыль если применить все рекомендованные цены"
+        )
+    
+    st.markdown("---")
     with col_m1: st.metric("📦 Всего товаров", total_products)
     with col_m2: st.metric("🔴 Убыточные", len(losing_df))
     with col_m3: st.metric("🟡 Ниже цели", len(below_target))
@@ -981,6 +1066,48 @@ with tab_analytics:
     st.markdown("---")
     st.subheader("📈 Визуальный анализ")
 
+    # НОВЫЙ ГРАФИК: Box Plot (распределение прибыли)
+    st.markdown("##### 📦 Распределение прибыли по товарам")
+    
+    col_box1, col_box2 = st.columns([2, 1])
+    
+    with col_box1:
+        import plotly.express as px
+        
+        # Создаём Box Plot
+        fig_box = px.box(
+            df_results,
+            y="current_profit",
+            points="all",  # Показываем все точки
+            title="Распределение прибыли (текущая)",
+            color_discrete_sequence=["#3B82F6"]
+        )
+        
+        fig_box.update_layout(
+            yaxis_title="Прибыль с 1 продажи, ₽",
+            height=400,
+            margin=dict(t=40, b=40, l=40, r=20),
+            plot_bgcolor='white',
+            paper_bgcolor='white'
+        )
+        
+        fig_box.update_yaxes(gridcolor='#F3F4F6')
+        
+        st.plotly_chart(fig_box, use_container_width=True)
+    
+    with col_box2:
+        st.markdown("##### 📊 Статистика прибыли")
+        
+        profit_stats = df_results["current_profit"].describe()
+        
+        st.metric("Средняя прибыль", f"{profit_stats['mean']:,.0f} ₽")
+        st.metric("Медиана", f"{profit_stats['50%']:,.0f} ₽")
+        st.metric("Мин. прибыль", f"{profit_stats['min']:,.0f} ₽")
+        st.metric("Макс. прибыль", f"{profit_stats['max']:,.0f} ₽")
+        st.metric("Ст. отклонение", f"{profit_stats['std']:,.0f} ₽")
+    
+    st.markdown("---")
+    
     col_g1, col_g2 = st.columns(2)
 
     with col_g1:
@@ -1107,6 +1234,65 @@ with tab_analytics:
             <i>Если продашь по 100 шт каждого = потеряешь {-total_loss_per_unit * 100:,.0f} ₽!</i>
         </div>
         """, unsafe_allow_html=True)
+    
+    # ===== НОВЫЙ БЛОК: ТАБЛИЦА "РИСКИ" =====
+    st.markdown("---")
+    st.subheader("⚠️ Матрица рисков")
+    
+    # Фильтруем товары с рисками
+    risk_filters = []
+    
+    # 1. Убыточные
+    if not losing_df.empty:
+        risk_filters.append(losing_df.assign(Риск="🔴 Убыточный"))
+    
+    # 2. Ниже точки безубыточности
+    if "break_even_price" in df_results.columns:
+        below_be = df_results[df_results["current_price_final"] < df_results["break_even_price"]].copy()
+        if not below_be.empty:
+            below_be["Риск"] = "🟠 Ниже точки безубыточности"
+            risk_filters.append(below_be)
+    
+    # 3. Низкая маржа (< 5%)
+    low_margin = df_results[df_results["current_margin"] < 5].copy()
+    if not low_margin.empty:
+        low_margin["Риск"] = "🟡 Низкая маржа (< 5%)"
+        risk_filters.append(low_margin)
+    
+    # 4. Высокая скидка (> 50%)
+    high_discount = df_results[df_results["current_discount"] > 50].copy()
+    if not high_discount.empty:
+        high_discount["Риск"] = "🟣 Высокая скидка (> 50%)"
+        risk_filters.append(high_discount)
+    
+    # Объединяем все риски
+    if risk_filters:
+        risk_df = pd.concat(risk_filters, ignore_index=True)
+        risk_df = risk_df.drop_duplicates(subset=["article"])  # Убираем дубли
+        risk_df = risk_df.sort_values("current_margin")
+        
+        # Отображаем таблицу
+        st.markdown(f"##### Найдено **{len(risk_df)}** товаров с рисками:")
+        
+        display_risk = risk_df[["article", "title", "current_price_final", "current_margin", "break_even_price", "Риск"]].copy()
+        display_risk.columns = ["Артикул", "Название", "Цена покупателю", "Маржа %", "Точка безубыточности", "Тип риска"]
+        
+        st.dataframe(
+            display_risk,
+            use_container_width=True,
+            height=300
+        )
+        
+        # Кнопка скачивания рисков
+        risk_csv = display_risk.to_csv(index=False).encode('utf-8-sig')
+        st.download_button(
+            "📥 Скачать список рисков (CSV)",
+            data=risk_csv,
+            file_name=f"risks_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            mime="text/csv"
+        )
+    else:
+        st.success("✅ Рисков не обнаружено! Все товары в безопасности.")
 
     with st.expander("📁 Анализ по категориям товаров"):
         cat_analysis = df_results.groupby("subject").agg(
@@ -1244,22 +1430,63 @@ with tab_products:
 
     with col_exp1:
         output_excel = io.BytesIO()
+        
         with pd.ExcelWriter(output_excel, engine="openpyxl") as writer:
+            # Лист 1: Все товары
             df_results.to_excel(writer, sheet_name="Все товары", index=False)
-            losing_df.to_excel(writer, sheet_name="Убыточные", index=False)
-            below_target.to_excel(writer, sheet_name="Ниже цели", index=False)
-            ok.to_excel(writer, sheet_name="В норме", index=False)
+            
+            # Лист 2: Убыточные
+            if not losing_df.empty:
+                losing_df.to_excel(writer, sheet_name="Убыточные", index=False)
+            
+            # Лист 3: Ниже цели
+            if not below_target.empty:
+                below_target.to_excel(writer, sheet_name="Ниже цели", index=False)
+            
+            # Лист 4: В норме
+            if not ok.empty:
+                ok.to_excel(writer, sheet_name="В норме", index=False)
+            
+            # Лист 5: Сводка (KPI)
+            summary_data = {
+                "Метрика": [
+                    "Всего товаров",
+                    "Убыточные",
+                    "Ниже цели",
+                    "В норме",
+                    "Средняя маржа (%)",
+                    "Потенциальная прибыль (₽)",
+                    "Точка безубыточности нарушена"
+                ],
+                "Значение": [
+                    len(df_results),
+                    len(losing_df),
+                    len(below_target),
+                    len(ok),
+                    round(df_results["current_margin"].mean(), 2),
+                    round(potential, 2),
+                    len(below_break_even) if "break_even_price" in df_results.columns else 0
+                ]
+            }
+            summary_df = pd.DataFrame(summary_data)
+            summary_df.to_excel(writer, sheet_name="Сводка", index=False)
+            
+            # Лист 6: Цены для загрузки (для WB API)
             prices_to_update = df_results[["nm_id", "recommended_price", "recommended_discount"]].copy()
             prices_to_update.columns = ["nmID", "price", "discount"]
             prices_to_update.to_excel(writer, sheet_name="Цены для загрузки", index=False)
-
+        
         st.download_button(
-            "📊 Excel",
+            "📊 Полный отчёт (Excel)",
             data=output_excel.getvalue(),
             file_name=f"wb_prices_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
+            use_container_width=True,
+            help="Скачать полный отчёт с аналитикой"
         )
+        
+        # Toast-уведомление
+        st.toast("📊 Excel-отчёт готов к скачиванию", icon="📥")
 
     with col_exp2:
         csv_data = df_results.to_csv(index=False).encode('utf-8-sig')
@@ -1285,6 +1512,32 @@ with tab_products:
             mime="application/json",
             use_container_width=True
         )
+    
+    # Инструкция по Google Sheets
+    with st.expander("📤 Как импортировать в Google Таблицы?", expanded=False):
+        st.markdown("""
+        ### 📋 Инструкция по импорту в Google Sheets:
+        
+        **Способ 1: Через файл Excel**
+        1. Скачайте файл Excel (кнопка "📊 Полный отчёт")
+        2. Зайдите в [Google Таблицы](https://sheets.google.com)
+        3. Нажмите **"Файл"** → **"Импорт"** → **"Загрузить"**
+        4. Выберите скачанный Excel-файл
+        5. Настройте импорт и нажмите **"Импортировать данные"**
+        
+        **Способ 2: Копирование данных**
+        1. Откройте скачанный Excel-файл
+        2. Выделите все данные (Ctrl+A) и скопируйте (Ctrl+C)
+        3. Откройте новую Google Таблицу
+        4. Вставьте данные (Ctrl+V)
+        
+        **Способ 3: Через CSV (быстрее)**
+        1. Скачайте файл CSV (кнопка "📄 CSV")
+        2. В Google Таблице: **Файл** → **Импорт** → **Загрузить CSV**
+        
+        ---
+        💡 **Совет:** Google Таблицы автоматически обновляют данные при повторном импорте!
+        """)
 
     # ОБНОВЛЕНИЕ ЦЕН С ВАЛИДАЦИЕЙ
     st.markdown("---")
@@ -1339,6 +1592,9 @@ with tab_products:
             </div>
             """, unsafe_allow_html=True)
             
+            # Toast-уведомление о критических ошибках
+            st.toast(f"🚨 Внимание! {len(critical_errors)} убыточных товаров", icon="⚠️")
+            
             with st.expander(f"🔴 Показать проблемы ({len(critical_errors)} шт)", expanded=True):
                 for err in critical_errors[:20]:
                     st.error(f"**{err['article']}** — {err['message']}")
@@ -1357,6 +1613,7 @@ with tab_products:
         
         if not critical_errors and not warnings:
             st.success("✅ Всё проверено — проблем не обнаружено!")
+            st.toast("✅ Валидация пройдена успешно", icon="✅")
         
         st.markdown("---")
         st.markdown("### 📋 Что будет изменено:")
@@ -1376,10 +1633,16 @@ with tab_products:
             col_conf1, col_conf2, col_conf3 = st.columns(3)
             
             with col_conf1:
-                if st.button(f"✅ Только безопасные ({len(safe_update)})", type="primary", use_container_width=True):
+                if st.button(f"✅ Только безопасные ({len(safe_update)} товаров)", type="primary", use_container_width=True):
                     price_updates = [{"nmID": int(r["nm_id"]), "price": int(r["recommended_price"]), "discount": int(r["recommended_discount"])} for _, r in safe_update.iterrows()]
+                    
                     with st.spinner(f"💰 Обновляем {len(price_updates)} товаров..."):
                         result = update_prices(api_key, price_updates)
+                    
+                    # Toast об успехе
+                    if result['success'] > 0:
+                        st.toast(f"✅ Успешно обновлено {result['success']} товаров!", icon="🎉")
+                    
                     st.session_state["update_result"] = result
                     st.session_state["show_confirm"] = None
                     st.session_state["to_update_data"] = None
@@ -1388,8 +1651,16 @@ with tab_products:
             with col_conf2:
                 if st.button("🚨 Обновить ВСЕ, включая убыточные", use_container_width=True):
                     price_updates = [{"nmID": int(r["nm_id"]), "price": int(r["recommended_price"]), "discount": int(r["recommended_discount"])} for _, r in to_update.iterrows()]
+                    
                     with st.spinner(f"💰 Обновляем {len(price_updates)} товаров..."):
                         result = update_prices(api_key, price_updates)
+                    
+                    # Toast об успехе/ошибке
+                    if result['success'] > 0:
+                        st.toast(f"✅ Обновлено {result['success']} товаров (включая убыточные!)", icon="⚠️")
+                    if result.get("errors"):
+                        st.toast(f"❌ Ошибок: {len(result['errors'])}", icon="🚨")
+                    
                     st.session_state["update_result"] = result
                     st.session_state["show_confirm"] = None
                     st.session_state["to_update_data"] = None
@@ -1405,8 +1676,14 @@ with tab_products:
             with col_conf1:
                 if st.button(f"✅ ДА, обновить {total} товаров", type="primary", use_container_width=True):
                     price_updates = [{"nmID": int(r["nm_id"]), "price": int(r["recommended_price"]), "discount": int(r["recommended_discount"])} for _, r in to_update.iterrows()]
+                    
                     with st.spinner(f"💰 Обновляем {len(price_updates)} товаров..."):
                         result = update_prices(api_key, price_updates)
+                    
+                    # Toast об успехе
+                    if result['success'] > 0:
+                        st.toast(f"🎉 Готово! Обновлено {result['success']} товаров", icon="✅")
+                    
                     st.session_state["update_result"] = result
                     st.session_state["show_confirm"] = None
                     st.session_state["to_update_data"] = None
