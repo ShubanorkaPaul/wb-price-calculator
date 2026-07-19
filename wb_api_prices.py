@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 import time
 import re
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 BASE_CONTENT = "https://content-api.wildberries.ru"
@@ -22,15 +22,15 @@ def get_headers(api_key):
     return {"Authorization": api_key}
 
 
-def make_request(method, url, api_key, params=None, json_data=None, max_retries=5):
+def make_request(method, url, api_key, params=None, json_data=None, max_retries=3):
     """Универсальный запрос с повторными попытками"""
 
     for attempt in range(max_retries):
         try:
             if method == "GET":
-                response = requests.get(url, headers=get_headers(api_key), params=params, timeout=60)
+                response = requests.get(url, headers=get_headers(api_key), params=params, timeout=30)
             elif method == "POST":
-                response = requests.post(url, headers=get_headers(api_key), json=json_data, timeout=60)
+                response = requests.post(url, headers=get_headers(api_key), json=json_data, timeout=30)
             else:
                 return None, f"Неизвестный метод: {method}"
 
@@ -38,7 +38,8 @@ def make_request(method, url, api_key, params=None, json_data=None, max_retries=
                 return response, None
 
             if response.status_code == 429:
-                wait_time = 15 * (attempt + 1)
+                wait_time = 2 * (attempt + 1)
+                print(f"[WB API] Rate limit 429 for {url}, waiting {wait_time}s...")
                 if attempt < max_retries - 1:
                     time.sleep(wait_time)
                     continue
@@ -50,11 +51,13 @@ def make_request(method, url, api_key, params=None, json_data=None, max_retries=
             return None, f"HTTP {response.status_code}"
 
         except requests.exceptions.Timeout:
+            print(f"[WB API] Timeout for {url} (attempt {attempt+1})")
             if attempt < max_retries - 1:
-                time.sleep(3)
+                time.sleep(2)
                 continue
             return None, "timeout"
         except Exception as e:
+            print(f"[WB API] Exception for {url}: {e}")
             return None, str(e)
 
     return None, "max_retries"
@@ -68,6 +71,8 @@ def get_all_cards(api_key):
     all_cards = []
     cursor = {"limit": 100}
 
+    print("[WB API] Starting get_all_cards...")
+    page_count = 0
     while True:
         payload = {
             "settings": {
@@ -81,21 +86,25 @@ def get_all_cards(api_key):
         if error:
             if error == "401":
                 st.error("❌ Неверный API ключ или нет прав на 'Контент'")
+                print("[WB API] get_all_cards 401 Unauthorized")
             elif error == "429":
                 st.warning("⚠️ WB временно ограничил запросы. Подожди пару минут.")
+                print("[WB API] get_all_cards 429 Rate Limit")
             else:
                 st.error(f"❌ Ошибка получения карточек: {error}")
+                print(f"[WB API] get_all_cards error: {error}")
             return pd.DataFrame()
 
         try:
             data = response.json()
             cards = data.get("cards", [])
             all_cards.extend(cards)
+            page_count += 1
 
             new_cursor = data.get("cursor", {})
             total = new_cursor.get("total", 0)
 
-            if total < 100:
+            if total < 100 or not cards:
                 break
 
             cursor = {
@@ -104,12 +113,14 @@ def get_all_cards(api_key):
                 "nmID": new_cursor.get("nmID")
             }
 
-            time.sleep(0.3)
+            time.sleep(0.1)
 
         except Exception as e:
+            print(f"[WB API] get_all_cards exception: {e}")
             st.error(f"❌ Ошибка парсинга карточек: {e}")
             return pd.DataFrame()
 
+    print(f"[WB API] get_all_cards finished. Total cards: {len(all_cards)}")
     result = []
     for card in all_cards:
         dimensions = card.get("dimensions", {})
@@ -150,17 +161,21 @@ def get_prices(api_key):
     offset = 0
     limit = 1000
 
+    print("[WB API] Starting get_prices...")
     while True:
         params = {"limit": limit, "offset": offset}
-        response, error = make_request("GET", url, api_key, params=params, max_retries=5)
+        response, error = make_request("GET", url, api_key, params=params, max_retries=3)
 
         if error:
             if error == "401":
                 st.error("❌ Нет прав 'Цены и скидки' у API ключа")
+                print("[WB API] get_prices 401 Unauthorized")
             elif error == "429":
                 st.warning("⚠️ WB временно ограничил запросы. Подожди 5-10 минут.")
+                print("[WB API] get_prices 429 Rate Limit")
             else:
                 st.error(f"❌ Ошибка получения цен: {error}")
+                print(f"[WB API] get_prices error: {error}")
             return pd.DataFrame()
 
         try:
@@ -176,12 +191,14 @@ def get_prices(api_key):
                 break
 
             offset += limit
-            time.sleep(0.5)
+            time.sleep(0.1)
 
         except Exception as e:
+            print(f"[WB API] get_prices exception: {e}")
             st.error(f"❌ Ошибка парсинга цен: {e}")
             return pd.DataFrame()
 
+    print(f"[WB API] get_prices finished. Total prices: {len(all_prices)}")
     result = []
     for good in all_prices:
         sizes = good.get("sizes", [])
@@ -212,6 +229,7 @@ def get_commissions(api_key):
     response, error = make_request("GET", url, api_key, params=params)
 
     if error:
+        print(f"[WB API] get_commissions error: {error}")
         return pd.DataFrame()
 
     try:
@@ -229,9 +247,11 @@ def get_commissions(api_key):
                 "commission_dbw": item.get("kgvpSupplierExpress", 0),
             })
 
+        print(f"[WB API] get_commissions finished. Total commissions: {len(result)}")
         return pd.DataFrame(result)
 
-    except Exception:
+    except Exception as e:
+        print(f"[WB API] get_commissions exception: {e}")
         return pd.DataFrame()
 
 
@@ -248,6 +268,7 @@ def get_stocks_by_warehouse(api_key):
     response, error = make_request("GET", url, api_key, params=params, max_retries=2)
 
     if error:
+        print(f"[WB API] get_stocks_by_warehouse error: {error}")
         return pd.DataFrame()
 
     try:
@@ -255,7 +276,8 @@ def get_stocks_by_warehouse(api_key):
         if not data:
             return pd.DataFrame()
         return pd.DataFrame(data)
-    except Exception:
+    except Exception as e:
+        print(f"[WB API] get_stocks_by_warehouse exception: {e}")
         return pd.DataFrame()
 
 
@@ -351,26 +373,41 @@ def load_all_data_parallel(api_key, load_stocks=False):
     }
     
     def load_cards():
-        results["cards"] = get_all_cards(api_key)
+        try:
+            results["cards"] = get_all_cards(api_key)
+        except Exception as e:
+            print(f"[Load] Cards exception: {e}")
     
     def load_prices_fn():
-        results["prices"] = get_prices(api_key)
+        try:
+            results["prices"] = get_prices(api_key)
+        except Exception as e:
+            print(f"[Load] Prices exception: {e}")
     
     def load_commissions_fn():
-        results["commissions"] = get_commissions(api_key)
+        try:
+            results["commissions"] = get_commissions(api_key)
+        except Exception as e:
+            print(f"[Load] Commissions exception: {e}")
     
     def load_stocks_fn():
-        results["stocks"] = get_stocks_by_warehouse(api_key)
+        try:
+            results["stocks"] = get_stocks_by_warehouse(api_key)
+        except Exception as e:
+            print(f"[Load] Stocks exception: {e}")
     
     with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = [
-            executor.submit(load_cards),
-            executor.submit(load_prices_fn),
-            executor.submit(load_commissions_fn),
-        ]
+        futures = {
+            executor.submit(load_cards): "cards",
+            executor.submit(load_prices_fn): "prices",
+            executor.submit(load_commissions_fn): "commissions",
+        }
         
-        for future in futures:
-            future.result()
+        for future in as_completed(futures, timeout=90):
+            try:
+                future.result()
+            except Exception as e:
+                print(f"[Load] Future error for {futures[future]}: {e}")
     
     if load_stocks:
         load_stocks_fn()
@@ -386,26 +423,21 @@ def parse_action_file(uploaded_file):
     Возвращает: (DataFrame, error_message)
     """
     try:
-        # Определяем название акции из имени файла
         action_name = "Акция WB"
         try:
             file_name = uploaded_file.name
-            # Убираем расширение
             name_without_ext = file_name.rsplit('.', 1)[0]
-            # Ищем текст на русском
             match = re.search(r'[а-яА-ЯёЁ][а-яА-ЯёЁ\s\-_]+', name_without_ext)
             if match:
                 action_name = match.group(0).strip().replace('_', ' ').replace('-', ' ')
         except:
             pass
         
-        # Читаем файл
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file)
         else:
             df = pd.read_excel(uploaded_file)
         
-        # Маппинг колонок (WB может менять названия)
         column_mappings = {
             'article': ['артикул поставщика', 'артикул продавца', 'артикул', 'vendor', 'sku'],
             'nm_id': ['артикул wb', 'nm_id', 'nmid'],
@@ -425,7 +457,6 @@ def parse_action_file(uploaded_file):
             'in_action': ['товар уже участвует в акции', 'участвует в акции'],
         }
         
-        # Находим реальные названия колонок
         col_map = {}
         for target_col, possible_names in column_mappings.items():
             for actual_col in df.columns:
@@ -437,11 +468,9 @@ def parse_action_file(uploaded_file):
                 if target_col in col_map:
                     break
         
-        # Проверяем обязательные колонки
         if 'article' not in col_map:
             return None, "Не найдена колонка 'Артикул поставщика' в файле"
         
-        # Формируем результат
         result = pd.DataFrame()
         result['article'] = df[col_map['article']].astype(str).str.strip()
         
@@ -515,11 +544,8 @@ def parse_action_file(uploaded_file):
         else:
             result['nm_id'] = 0
         
-        # Убираем пустые артикулы
         result = result[result['article'] != 'nan']
         result = result[result['article'].str.len() > 0]
-        
-        # Название акции
         result['action_name'] = action_name
         
         return result, None
