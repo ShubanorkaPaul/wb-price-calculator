@@ -954,6 +954,25 @@ with tab_analytics:
         - Защита от убытков
         """)
 
+    st.subheader("💰 Финансовая сводка (потенциальная)")
+    total_revenue = df_results["current_price_final"].sum()
+    total_profit_sum = df_results["current_profit"].sum()
+    total_cost_sum = df_results["cost_price"].sum()
+    roi_percent = (total_profit_sum / total_cost_sum * 100) if total_cost_sum > 0 else 0
+    
+    col_fin1, col_fin2, col_fin3, col_fin4 = st.columns(4)
+    with col_fin1:
+        st.metric("💰 Выручка (текущая)", f"{total_revenue:,.0f} ₽")
+    with col_fin2:
+        margin_avg = df_results["current_margin"].mean()
+        st.metric("📈 Прибыль (текущая)", f"{total_profit_sum:,.0f} ₽", delta=f"{margin_avg:.1f}% маржа")
+    with col_fin3:
+        st.metric("📊 ROI", f"{roi_percent:.1f}%")
+    with col_fin4:
+        st.metric("🚀 Потенциал роста", f"+{potential:,.0f} ₽", delta=f"+{potential:,.0f} ₽ от цен")
+
+    st.markdown("---")
+
     col_m1, col_m2, col_m3, col_m4 = st.columns(4)
     with col_m1: st.metric("📦 Всего товаров", total_products)
     with col_m2: st.metric("🔴 Убыточные", len(losing_df))
