@@ -565,7 +565,47 @@ with st.sidebar:
         st.info("💡 Для авто-режима остатки обязательны")
 
     st.markdown("---")
+    st.markdown("---")
 
+    st.subheader("💰 Комиссии WB")
+
+    st.caption("Если комиссия в калькуляторе не совпадает с кабинетом WB — выбери правильное поле вручную.")
+
+    fbs_commission_field = st.selectbox(
+        "Для FBS / Маркетплейс использовать:",
+        [
+            "kgvpMarketplace",
+            "paidStorageKgvp",
+            "kgvpSupplier",
+            "kgvpSupplierExpress",
+        ],
+        index=0,
+        help="Обычно для FBS используется kgvpMarketplace"
+    )
+
+    fbo_commission_field = st.selectbox(
+        "Для FBO / Склад WB использовать:",
+        [
+            "paidStorageKgvp",
+            "kgvpMarketplace",
+            "kgvpSupplier",
+            "kgvpSupplierExpress",
+        ],
+        index=0,
+        help="Обычно для FBO используется paidStorageKgvp"
+    )
+
+    dbs_commission_field = st.selectbox(
+        "Для DBS / Витрина использовать:",
+        [
+            "kgvpSupplier",
+            "kgvpMarketplace",
+            "paidStorageKgvp",
+            "kgvpSupplierExpress",
+        ],
+        index=0,
+        help="Обычно для DBS используется kgvpSupplier"
+    )
     st.subheader("🎯 Параметры расчёта")
     target_margin = st.slider("Целевая маржа, %", 10, 50, 20, 1)
     buyout_percent = st.slider("% выкупа", 30, 100, 90, 1)
@@ -812,18 +852,67 @@ if st.session_state["df_results"] is None:
     else:
         merged["model_available"] = True
 
-    if not commissions_df.empty:
+     if not commissions_df.empty:
         merged = merged.merge(
-            commissions_df[["subject_id", "commission_fbo", "commission_fbs", "commission_dbs", "commission_dbw"]],
-            on="subject_id", how="left"
+            commissions_df[
+                [
+                    "subject_id",
+                    "subject_name",
+                    "kgvpMarketplace",
+                    "paidStorageKgvp",
+                    "kgvpSupplier",
+                    "kgvpSupplierExpress",
+                ]
+            ],
+            on="subject_id",
+            how="left"
         )
+
+        def pick_commission(row):
+            """
+            Выбирает комиссию по модели товара и выбранным в боковой панели полям.
+            Если API не дал значение — используем fallback по категории.
+            """
+
+            model = str(row.get("model", "")).upper()
+
+            if model == "FBS":
+                field = fbs_commission_field
+            elif model == "FBO":
+                field = fbo_commission_field
+            elif model == "DBS":
+                field = dbs_commission_field
+            else:
+                field = fbs_commission_field
+
+            value = row.get(field, 0)
+
+            try:
+                value = float(value)
+            except:
+                value = 0
+
+            if value > 0:
+                return value, f"API: {field}"
+
+            fallback = get_commission_by_category(row.get("subject", ""), model)
+            return fallback, "Fallback"
+
+        commission_result = merged.apply(lambda row: pick_commission(row), axis=1)
+
+        merged["commission_percent"] = commission_result.apply(lambda x: x[0])
+        merged["commission_source"] = commission_result.apply(lambda x: x[1])
+
+    else:
         merged["commission_percent"] = merged.apply(
-            lambda row: (
-                row["commission_fbs"] if row["model"] == "FBS" and row.get("commission_fbs", 0) > 0
-                else row["commission_fbo"] if row["model"] == "FBO" and row.get("commission_fbo", 0) > 0
-                else get_commission_by_category(row["subject"], row["model"])
-            ), axis=1
+            lambda row: get_commission_by_category(row["subject"], row["model"]),
+            axis=1
         )
+        merged["commission_source"] = "Fallback"
+        merged["kgvpMarketplace"] = 0
+        merged["paidStorageKgvp"] = 0
+        merged["kgvpSupplier"] = 0
+        merged["kgvpSupplierExpress"] = 0
     else:
         merged["commission_percent"] = merged.apply(lambda row: get_commission_by_category(row["subject"], row["model"]), axis=1)
 
