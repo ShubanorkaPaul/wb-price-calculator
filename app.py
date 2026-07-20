@@ -1222,6 +1222,58 @@ with tab_analytics:
         </div>
         """, unsafe_allow_html=True)
 
+        with st.expander("🔍 Диагностика комиссий WB"):
+        st.markdown("""
+        Здесь показаны все комиссии, которые WB API вернул по категориям.
+        
+        Сравни эти значения с кабинетом WB → **Тарифы**.
+        Если калькулятор использует не то поле — поменяй источник комиссии в боковой панели.
+        """)
+
+        diag_cols = [
+            "subject",
+            "model",
+            "commission_percent",
+            "commission_source",
+            "kgvpMarketplace",
+            "paidStorageKgvp",
+            "kgvpSupplier",
+            "kgvpSupplierExpress",
+        ]
+
+        available_diag_cols = [c for c in diag_cols if c in df_results.columns]
+
+        if available_diag_cols:
+            diag_df = df_results[available_diag_cols].drop_duplicates(
+                subset=["subject", "model"]
+            ).copy()
+
+            rename_map = {
+                "subject": "Категория",
+                "model": "Модель",
+                "commission_percent": "Используется %",
+                "commission_source": "Источник",
+                "kgvpMarketplace": "kgvpMarketplace",
+                "paidStorageKgvp": "paidStorageKgvp",
+                "kgvpSupplier": "kgvpSupplier",
+                "kgvpSupplierExpress": "kgvpSupplierExpress",
+            }
+
+            diag_df = diag_df.rename(columns=rename_map)
+
+            st.dataframe(
+                diag_df.style.format({
+                    "Используется %": "{:.1f}",
+                    "kgvpMarketplace": "{:.1f}",
+                    "paidStorageKgvp": "{:.1f}",
+                    "kgvpSupplier": "{:.1f}",
+                    "kgvpSupplierExpress": "{:.1f}",
+                }),
+                use_container_width=True
+            )
+        else:
+            st.warning("Нет данных для диагностики комиссий.")
+
     with st.expander("📁 Анализ по категориям товаров"):
         cat_analysis = df_results.groupby("subject").agg(
             Товаров=("article", "count"),
