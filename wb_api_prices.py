@@ -221,7 +221,21 @@ def get_prices(api_key):
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_commissions(api_key):
-    """Получить комиссии по категориям"""
+    @st.cache_data(ttl=86400, show_spinner=False)
+def get_commissions(api_key):
+    """
+    Получить комиссии по категориям из WB API.
+
+    ВАЖНО:
+    WB отдаёт несколько похожих полей:
+    - kgvpMarketplace      — обычно Маркетплейс / FBS
+    - paidStorageKgvp      — часто Склад WB / FBO
+    - kgvpSupplier         — Витрина / DBS
+    - kgvpSupplierExpress  — Курьер WB / DBW
+
+    Но у WB названия и логика могут меняться, поэтому в app.py
+    мы даём пользователю выбрать источник комиссии вручную.
+    """
 
     url = f"{BASE_COMMON}/api/v1/tariffs/commission"
     params = {"locale": "ru"}
@@ -229,7 +243,6 @@ def get_commissions(api_key):
     response, error = make_request("GET", url, api_key, params=params)
 
     if error:
-        print(f"[WB API] get_commissions error: {error}")
         return pd.DataFrame()
 
     try:
@@ -237,21 +250,54 @@ def get_commissions(api_key):
         report = data.get("report", [])
 
         result = []
+
         for item in report:
             result.append({
                 "subject_id": item.get("subjectID"),
                 "subject_name": item.get("subjectName", ""),
-                "commission_fbo": item.get("paidStorageKgvp", 0),
-                "commission_fbs": item.get("kgvpMarketplace", 0),
-                "commission_dbs": item.get("kgvpSupplier", 0),
-                "commission_dbw": item.get("kgvpSupplierExpress", 0),
+
+                # Сырые поля WB
+                "kgvpMarketplace": item.get("kgvpMarketplace", 0),
+                "paidStorageKgvp": item.get("paidStorageKgvp", 0),
+                "kgvpSupplier": item.get("kgvpSupplier", 0),
+                "kgvpSupplierExpress": item.get("kgvpSupplierExpress", 0),
+
+                # Алиасы для удобства
+                "commission_fbs_default": item.get("kgvpMarketplace", 0),
+                "commission_fbo_default": item.get("paidStorageKgvp", 0),
+                "commission_dbs_default": item.get("kgvpSupplier", 0),
+                "commission_dbw_default": item.get("kgvpSupplierExpress", 0),
             })
 
-        print(f"[WB API] get_commissions finished. Total commissions: {len(result)}")
-        return pd.DataFrame(result)
+        df = pd.DataFrame(result)
 
-    except Exception as e:
-        print(f"[WB API] get_commissions exception: {e}")
+        if df.empty:
+            return df
+
+        # Приводим к числам
+        numeric_cols = [
+            "subject_id",
+            "kgvpMarketplace",
+            "paidStorageKgvp",
+            "kgvpSupplier",
+            "kgvpSupplierExpress",
+            "commission_fbs_default",
+            "commission_fbo_default",
+            "commission_dbs_default",
+            "commission_dbw_default",
+        ]
+
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+        # Убираем дубли по subject_id, если вдруг WB вернул повторы
+        if "subject_id" in df.columns:
+            df = df.drop_duplicates(subset=["subject_id"])
+
+        return df
+
+    except Exception:
         return pd.DataFrame()
 
 
